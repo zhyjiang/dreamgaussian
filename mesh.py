@@ -4,6 +4,7 @@ import torch
 import trimesh
 import numpy as np
 
+
 def dot(x, y):
     return torch.sum(x * y, -1, keepdim=True)
 
