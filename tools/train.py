@@ -1,8 +1,10 @@
 import argparse
 from omegaconf import OmegaConf
 
-from lib.trainer import Trainer
+import os, sys
+sys.path.append(os.getcwd())
 
+from lib.trainer import Trainer
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

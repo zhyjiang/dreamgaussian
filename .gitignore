@@ -7,6 +7,7 @@ venv_*/
 .vscode/
 .idea/
 data/*
+vis/*
 
 tmp_*
 data?
@@ -16,6 +17,7 @@ scripts2
 model_cache
 
 logs*
-videos*
-images*
+videos/*
+images/*
 *.mp4
+test.jpg

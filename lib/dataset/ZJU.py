@@ -57,11 +57,15 @@ class ZJU(Dataset):
     def __getitem__(self, index):
         vertices = self.vertices[index % len(self.vertices)]
         vertices = vertices @ self.camera_params['RTs'][index // len(self.vertices)].T
+        fovx = np.rad2deg(2 * np.arctan2(1024, 2 * self.camera_params['Ks'][index // len(self.vertices)][0, 0]))
+        fovy = np.rad2deg(2 * np.arctan2(1024, 2 * self.camera_params['Ks'][index // len(self.vertices)][1, 1]))
         return {
             'vertices': vertices,
-            'image': cv2.imread(self.image_path[index]),
-            'mask': cv2.imread(self.mask_path[index]),
+            'image': cv2.imread(self.image_path[index]).astype(np.float32).transpose(2, 0, 1) / 255,
+            'mask': cv2.imread(self.mask_path[index])[:, :, 0],
             'K': self.camera_params['Ks'][index // len(self.vertices)],
+            'fovx': fovx,
+            'fovy': fovy,
         }
 
     def __len__(self):

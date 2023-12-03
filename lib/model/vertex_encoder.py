@@ -84,8 +84,8 @@ class VertexTransformer(nn.Module):
         self.num_joints = num_joints
         self.pose_dim = pose_dim
         
-        self.positional_emb = nn.Parameter(torch.randn((1, num_joints + 2, hidden_dim)))
-        self.cls_token = nn.Parameter(torch.randn((hidden_dim)))
+        self.positional_emb = nn.Parameter(torch.randn((1, num_joints, hidden_dim)))
+        # self.cls_token = nn.Parameter(torch.randn((hidden_dim)))
         self.proj_layer = nn.Linear(hidden_dim, hidden_dim, bias=False)
 
         self.pre_emb = nn.Linear(pose_dim, hidden_dim)
@@ -101,11 +101,24 @@ class VertexTransformer(nn.Module):
         self.mask_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         self.initialize_weights()
         
+        self.mean3D_head = self._make_head(hidden_dim, 3)
+        self.opacity_head = self._make_head(hidden_dim, 1)
+        self.shs_head = self._make_head(hidden_dim, 3)
+        self.rotations_head = self._make_head(hidden_dim, 4)
+        self.scales_head = self._make_head(hidden_dim, 3)
+    
+    def _make_head(self, hidden_dim, out_dim):
+        layers = nn.Sequential(nn.Linear(self.hidden_dim, hidden_dim),
+                               nn.GELU(),
+                               nn.Dropout(0.1),
+                               nn.Linear(hidden_dim, out_dim))
+        return layers    
+    
     def initialize_weights(self):
-        pos_embed = get_1d_sincos_pos_embed(self.positional_emb.shape[-1], np.arange(self.num_joints), cls_token=True)
+        pos_embed = get_1d_sincos_pos_embed(self.positional_emb.shape[-1], np.arange(self.num_joints))
         self.positional_emb.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
         
-        torch.nn.init.normal_(self.cls_token, std=.02)
+        # torch.nn.init.normal_(self.cls_token, std=.02)
         torch.nn.init.normal_(self.mask_token, std=.02)
         self.apply(self._init_weights)
 
@@ -128,13 +141,19 @@ class VertexTransformer(nn.Module):
         x = self.pre_norm(x)
         if mask is not None:
             x = self.masking(x, mask)
-        x = torch.cat((self.cls_token.repeat(x.shape[0], 1, 1), x), dim=1)
-        x = x + self.positional_emb[:, :-1, :]
+        # x = torch.cat((self.cls_token.repeat(x.shape[0], 1, 1), x), dim=1)
+        x = x + self.positional_emb
         x = self.dropout(x)
         
         x = self.encoder(x)
-        x = self.proj_layer(x)
-        return x
+        # x = self.proj_layer(x)
+        
+        means3D = self.mean3D_head(x)
+        opacity = self.opacity_head(x).sigmoid()
+        shs = self.shs_head(x)
+        rotations = self.rotations_head(x).sigmoid()
+        scales = self.scales_head(x).sigmoid()
+        return means3D, opacity, scales, shs, rotations
     
     def masking(self, x, mask):
         x[mask] = self.mask_token

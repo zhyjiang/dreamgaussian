@@ -1,7 +1,7 @@
 import argparse
 from omegaconf import OmegaConf
 
-from lib.trainer import Trainer
+from lib.gui import GUI
 
 
 if __name__ == "__main__":
@@ -12,7 +12,7 @@ if __name__ == "__main__":
     # override default config from cli
     opt = OmegaConf.merge(OmegaConf.load(args.config), OmegaConf.from_cli(extras))
 
-    gui = Trainer(opt)
+    gui = GUI(opt)
 
     if opt.gui:
         gui.render()
