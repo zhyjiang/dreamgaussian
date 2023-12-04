@@ -656,8 +656,8 @@ class MiniCam:
         w2c = np.linalg.inv(c2w)
 
         # rectify...
-        w2c[1:3, :3] *= -1
-        w2c[:3, 3] *= -1
+        # w2c[1:3, :3] *= -1
+        # w2c[:3, 3] *= -1
 
         self.world_view_transform = torch.tensor(w2c).transpose(0, 1).cuda()
         self.projection_matrix = (
@@ -738,10 +738,10 @@ class Renderer:
             )
             + 0
         )
-        # try:
-        #     screenspace_points.retain_grad()
-        # except:
-        #     pass
+        try:
+            screenspace_points.retain_grad()
+        except:
+            pass
 
         # Set up rasterization configuration
         tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)

@@ -8,6 +8,7 @@ venv_*/
 .idea/
 data/*
 vis/*
+vis_depth/*
 
 tmp_*
 data?
@@ -15,6 +16,7 @@ data??
 scripts2
 
 model_cache
+SMPL/*
 
 logs*
 videos/*

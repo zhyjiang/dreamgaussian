@@ -1,5 +1,6 @@
 import os
 import cv2
+from matplotlib import pyplot as plt
 import time
 import tqdm
 import numpy as np
@@ -183,6 +184,7 @@ class Trainer:
                 
                 vertices = data['vertices'].float().to(self.device)
                 means3D, opacity, scales, shs, rotations = self.encoder(vertices)
+                
                 mask = data['mask'].to(self.device)
                 gt_images = data['image'].to(self.device)
                 gt_images = gt_images * mask[:, None, :, :]
@@ -204,13 +206,16 @@ class Trainer:
                                                shs[idx][:, None, :],
                                                rotations[idx],
                                                bg_color=bg_color)
-                    image = out["image"].unsqueeze(0) * mask[idx:idx+1, None, :, :]# [1, 3, H, W] in [0, 1]
+                    image = out["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
+                    depth = out['depth'].squeeze() # [H, W]
                     loss += self.reconstruct_loss(image, gt_images[idx:idx+1])
                     
                     if iter % 100 == 0 and idx == 0:
-                        np_img = image[idx].detach().cpu().numpy().transpose(1, 2, 0)
+                        np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
+                        depth_img = depth.detach().cpu().numpy()
                         cv2.imwrite(f'./vis/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
+                        plt.imsave(f'./vis_depth/{iter}.jpg', depth_img)
                 pbar.set_postfix({'Loss': f'{loss.item():.5f}'})
                 # optimize step
                 loss.backward()
