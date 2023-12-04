@@ -202,13 +202,13 @@ class Trainer:
                     out = self.renderer.render(cam,
                                                vertices[idx],
                                                opacity[idx],
-                                               scales[idx],
+                                               scales[idx] * 0.1,
                                                shs[idx][:, None, :],
                                                rotations[idx],
                                                bg_color=bg_color)
                     image = out["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
                     depth = out['depth'].squeeze() # [H, W]
-                    loss += self.reconstruct_loss(image, gt_images[idx:idx+1])
+                    loss += self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
                     
                     if iter % 100 == 0 and idx == 0:
                         np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
