@@ -190,7 +190,7 @@ class Trainer:
                 gt_images = gt_images * mask[:, None, :, :]
                 for idx in range(self.opt.batch_size):
                     cam = MiniCam(
-                        np.eye(4, dtype=np.float32),
+                        data['w2c'][idx],
                         self.W,
                         self.H,
                         data['fovy'][idx],
@@ -202,7 +202,7 @@ class Trainer:
                     out = self.renderer.render(cam,
                                                vertices[idx],
                                                opacity[idx],
-                                               scales[idx] * 0.1,
+                                               scales[idx] * 0.05,
                                                shs[idx][:, None, :],
                                                rotations[idx],
                                                bg_color=bg_color)

@@ -28,6 +28,9 @@ class ZJU(Dataset):
         self.RTs = []
         self.read_data()
         
+        self.sample_rate = cfg.dataset.sample_rate
+        self.smpl_coord = cfg.dataset.smpl_coord
+        
     def read_data(self):
         self.annots = np.load(os.path.join(self.path, 'annots.npy'), allow_pickle=True).item()['cams']
         
@@ -50,12 +53,11 @@ class ZJU(Dataset):
         for fid in tqdm(range(num_frame)):
             self.smpl_params.append(np.load(os.path.join(self.path, 'new_params', f'{fid+1}.npy'), allow_pickle=True).item())
             vertices = np.load(os.path.join(self.path, 'new_vertices', f'{fid+1}.npy'), allow_pickle=True)
-            pelvis = self.smpl.h36m_joints_extract(vertices[None, ...])[:, 14]
             vertices = np.concatenate([vertices, np.ones([vertices.shape[0], 1])], axis=-1)
             self.vertices.append(vertices)
             # self.vertices.append(vertices - pelvis[None, ...])
             smpl2w = np.eye(4)
-            smpl2w[3, :3] = pelvis[0]
+            # smpl2w[3, :3] = pelvis[0]
             self.smpl2w.append(smpl2w)
         
         assert len(self.image_path) == len(self.mask_path) == \
@@ -63,9 +65,15 @@ class ZJU(Dataset):
                len(self.vertices) * len(self.camera_list)
 
     def __getitem__(self, index):
-        index = 0
+        # index = 0
+        w2c = np.eye(4)
+        index = index * self.sample_rate
         vertices = self.vertices[index % len(self.vertices)]
         vertices = vertices @ self.camera_params['RTs'][index // len(self.vertices)].T
+        if self.smpl_coord:
+            pelvis = self.smpl.h36m_joints_extract(vertices[None, ...])[:, 14].numpy()
+            vertices -= pelvis
+            w2c[:3, 3] = pelvis
         fovx = 2 * np.arctan2(1024, 2 * self.camera_params['Ks'][index // len(self.vertices)][0, 0])
         fovy = 2 * np.arctan2(1024, 2 * self.camera_params['Ks'][index // len(self.vertices)][1, 1])
         return {
@@ -75,9 +83,9 @@ class ZJU(Dataset):
             'K': self.camera_params['Ks'][index // len(self.vertices)],
             'fovx': fovx,
             'fovy': fovy,
-            'RT': self.camera_params['RTs'][index // len(self.vertices)] @ self.smpl2w[index],
-            # 'T': 
+            # 'RT': self.camera_params['RTs'][index // len(self.vertices)] @ self.smpl2w[index],
+            'w2c': w2c.astype(np.float32),
         }
 
     def __len__(self):
-        return len(self.image_path)
+        return len(self.image_path) // self.sample_rate

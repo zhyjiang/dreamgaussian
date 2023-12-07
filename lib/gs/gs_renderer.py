@@ -643,7 +643,7 @@ def getProjectionMatrix(znear, zfar, fovX, fovY):
 
 
 class MiniCam:
-    def __init__(self, c2w, width, height, fovy, fovx, znear, zfar):
+    def __init__(self, w2c, width, height, fovy, fovx, znear, zfar):
         # c2w (pose) should be in NeRF convention.
 
         self.image_width = width
@@ -653,7 +653,7 @@ class MiniCam:
         self.znear = znear
         self.zfar = zfar
 
-        w2c = np.linalg.inv(c2w)
+        # w2c = np.linalg.inv(c2w)
 
         # rectify...
         # w2c[1:3, :3] *= -1
@@ -668,7 +668,7 @@ class MiniCam:
             .cuda()
         )
         self.full_proj_transform = self.world_view_transform @ self.projection_matrix
-        self.camera_center = -torch.tensor(c2w[:3, 3]).cuda()
+        self.camera_center = -torch.zeros_like(w2c[:3, 3]).cuda()
 
 
 class Renderer:
