@@ -8,8 +8,10 @@ dataset:
   name: ZJU
   path: ./data/ZJUMOCAP/CoreView_313
   # camera_list: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-  camera_list: [1,]
+  camera_list: [1]
   num_workers: 4
+  smpl_coord: True
+  sample_rate: 1
 
 ### Training
 # guidance loss weights (0 to disable)
@@ -35,7 +37,11 @@ train_geo: False
 # prob to invert background color during training (0 = always black, 1 = always white)
 invert_bg_prob: 0.5
 
-lr: 0.0001
+ssim_weight: 0.2
+
+scale_factor: 0.04
+
+lr: 0.0005
 
 ### GUI
 gui: False

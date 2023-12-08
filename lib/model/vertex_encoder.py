@@ -149,6 +149,7 @@ class VertexTransformer(nn.Module):
         # x = self.proj_layer(x)
         
         means3D = self.mean3D_head(x)
+        # import ipdb; ipdb.set_trace()
         opacity = self.opacity_head(x).sigmoid()
         shs = self.shs_head(x)
         rotations = self.rotations_head(x).sigmoid()

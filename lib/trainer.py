@@ -13,6 +13,7 @@ import rembg
 
 from cam_utils import orbit_camera, OrbitCamera
 from lib.gs.gs_renderer import Renderer, MiniCam
+from kornia.losses.ssim import SSIMLoss, ssim_loss
 
 from grid_put import mipmap_linear_grid_put_2d
 from mesh import Mesh, safe_normalize
@@ -76,7 +77,8 @@ class Trainer:
                                                       num_workers=opt.dataset.num_workers)
 
         self.reconstruct_loss = torch.nn.MSELoss()
-
+        self.reg_loss = torch.nn.MSELoss()
+        
         if self.gui:
             dpg.create_context()
             self.register_dpg()
@@ -85,6 +87,37 @@ class Trainer:
     def __del__(self):
         if self.gui:
             dpg.destroy_context()
+            
+    def get_image_loss(self,ssim_weight=0.2, type="l1"):
+        if type == "l1":
+            base_loss_fn = torch.nn.functional.l1_loss
+        elif type == "l2":
+            base_loss_fn = torch.nn.functional.mse_loss
+        else:
+            raise NotImplementedError
+
+        def loss_fn(out, gt):
+            # import ipdb;ipdb.set_trace()
+            if len(gt.shape) != 4:
+                gt = gt.unsqueeze(0)
+            if len(out.shape) != 4:
+                out = out.unsqueeze(0)
+            if ssim_weight ==0 :
+                return base_loss_fn(out, gt)
+            
+            if out.shape[1] == 3:
+                out = out.reshape((1,1024,1024,-1))
+                gt = gt.reshape((1,1024,1024,-1))
+            loss = ssim_weight * ssim_loss(
+                out.moveaxis(-1, 1),
+                gt.moveaxis(-1, 1),
+                11,
+                reduction="mean",
+            ) + (1 - ssim_weight) * base_loss_fn(out, gt)
+
+            return loss
+
+        return loss_fn
 
     def seed_everything(self):
         try:
@@ -107,6 +140,8 @@ class Trainer:
 
         self.optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.opt.lr)
         self.encoder.to(self.device)
+        
+        self.ssim_reconstruction_loss = self.get_image_loss(ssim_weight=self.opt.ssim_weight, type="l2")
         # setup training
         # self.renderer.gaussians.training_setup(self.opt)
         # do not do progressive sh-level
@@ -184,7 +219,7 @@ class Trainer:
                 
                 vertices = data['vertices'].float().to(self.device)
                 means3D, opacity, scales, shs, rotations = self.encoder(vertices)
-                
+                scales = scales * self.opt.scale_factor
                 mask = data['mask'].to(self.device)
                 gt_images = data['image'].to(self.device)
                 gt_images = gt_images * mask[:, None, :, :]
@@ -200,7 +235,7 @@ class Trainer:
                     )
                     bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
                     out = self.renderer.render(cam,
-                                               vertices[idx],
+                                               vertices[idx]+means3D[idx],
                                                opacity[idx],
                                                scales[idx] * 0.05,
                                                shs[idx][:, None, :],
@@ -208,14 +243,17 @@ class Trainer:
                                                bg_color=bg_color)
                     image = out["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
                     depth = out['depth'].squeeze() # [H, W]
-                    loss += self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
+                    
+                    # loss += self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
+                    loss += self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx]))
+                    loss += self.ssim_reconstruction_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
                     
                     if iter % 100 == 0 and idx == 0:
                         np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
                         depth_img = depth.detach().cpu().numpy()
-                        cv2.imwrite(f'./vis/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
-                        plt.imsave(f'./vis_depth/{iter}.jpg', depth_img)
+                        cv2.imwrite(f'./vis_ssim/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
+                        # plt.imsave(f'./vis_depth_ssim/{iter}.jpg', depth_img)
                 pbar.set_postfix({'Loss': f'{loss.item():.5f}'})
                 # optimize step
                 loss.backward()
