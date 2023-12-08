@@ -75,9 +75,10 @@ class Trainer:
                                                       batch_size=opt.batch_size, 
                                                       shuffle=False, 
                                                       num_workers=opt.dataset.num_workers)
-
-        self.reconstruct_loss = torch.nn.MSELoss()
-        self.reg_loss = torch.nn.MSELoss()
+        
+        self.reconstruct_loss = None
+        self.reg_loss = None
+       
         
         if self.gui:
             dpg.create_context()
@@ -91,8 +92,10 @@ class Trainer:
     def get_image_loss(self,ssim_weight=0.2, type="l1"):
         if type == "l1":
             base_loss_fn = torch.nn.functional.l1_loss
+            return base_loss_fn
         elif type == "l2":
             base_loss_fn = torch.nn.functional.mse_loss
+            return base_loss_fn
         else:
             raise NotImplementedError
 
@@ -141,7 +144,32 @@ class Trainer:
         self.optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.opt.lr)
         self.encoder.to(self.device)
         
-        self.ssim_reconstruction_loss = self.get_image_loss(ssim_weight=self.opt.ssim_weight, type="l2")
+        
+        
+        if self.opt.loss.startswith('ssim'):
+            subloss = self.opt.loss.split('_')[-1]
+            self.reconstruct_loss = self.get_image_loss(ssim_weight=self.opt.ssim_weight, type=subloss)  
+            print(f'Using ssim {subloss} loss.')
+        elif self.opt.loss=='l2':
+            self.reconstruct_loss = torch.nn.MSELoss()
+            print('Using l2 loss.')
+        elif self.opt.loss=='l1':
+            self.reconstruct_loss = torch.nn.L1Loss()
+            print('Using l1 loss.')
+        else:
+            print('No loss defined.')
+            raise NotImplementedError
+        
+        if self.opt.reg_loss == 'l2':
+            self.reg_loss = torch.nn.MSELoss()
+            print('Using l2 reg loss.')
+        elif self.opt.reg_loss == 'l1':
+            self.reg_loss = torch.nn.L1Loss()
+            print('Using l1 reg loss.')
+        else:
+            print('No reg loss defined.')
+            
+
         # setup training
         # self.renderer.gaussians.training_setup(self.opt)
         # do not do progressive sh-level
@@ -245,15 +273,17 @@ class Trainer:
                     depth = out['depth'].squeeze() # [H, W]
                     
                     # loss += self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
-                    loss += self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx]))
-                    loss += self.ssim_reconstruction_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
+                    if self.reg_loss is not None:
+                        loss += self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx]))
+                    if self.reconstruct_loss is not None:
+                        loss += self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
                     
                     if iter % 100 == 0 and idx == 0:
                         np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
                         depth_img = depth.detach().cpu().numpy()
-                        cv2.imwrite(f'./vis_ssim/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
-                        # plt.imsave(f'./vis_depth_ssim/{iter}.jpg', depth_img)
+                        cv2.imwrite(f'./vis/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
+                        plt.imsave(f'./vis_depth/{iter}.jpg', depth_img)
                 pbar.set_postfix({'Loss': f'{loss.item():.5f}'})
                 # optimize step
                 loss.backward()

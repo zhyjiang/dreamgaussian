@@ -41,6 +41,10 @@ ssim_weight: 0.2
 
 scale_factor: 0.04
 
+loss:  ssim_l2 # [l1 l2 ssim_l2 ssim_l1] #silou loss needs to be added in the next version
+reg_loss: l2 # [l1 l2 or None]
+
+
 lr: 0.0005
 
 ### GUI
