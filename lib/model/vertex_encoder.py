@@ -77,7 +77,7 @@ class Transformer(nn.Module):
 
 class VertexTransformer(nn.Module):
     def __init__(self, hidden_dim=64, num_joints=6890, num_layers=3, pose_dim=2, nhead=4, dropout=0.1,
-                 dim_head=64, mlp_dim=64, has_bbox=False):
+                 dim_head=64, mlp_dim=64, has_bbox=False,upsample=1):
         super().__init__()
         
         self.hidden_dim = hidden_dim
@@ -94,11 +94,13 @@ class VertexTransformer(nn.Module):
         self.encoder = Transformer(hidden_dim, num_layers, nhead, dim_head, mlp_dim, dropout)
         
         self.dropout = nn.Dropout(dropout)
+        self.upsample_conv = nn.Conv1d(num_joints, num_joints*upsample, kernel_size=1) if upsample!=1 else None
         self.has_bbox = has_bbox
         if has_bbox:
             self.bbox_tokenize = nn.Linear(4, hidden_dim, bias=False)
             
         self.mask_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
+        self.upsample = upsample
         self.initialize_weights()
         
         self.mean3D_head = self._make_head(hidden_dim, 3)
@@ -131,6 +133,10 @@ class VertexTransformer(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv1d):
+            torch.nn.init.xavier_uniform_(m.weight)
+            if isinstance(m, nn.Conv1d) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
         
     def forward(self, x, mask_ratio=0.0):
         mask = None
@@ -146,6 +152,10 @@ class VertexTransformer(nn.Module):
         x = self.dropout(x)
         
         x = self.encoder(x)
+        
+        if self.upsample != 1:
+            x = self.upsample_conv(x)
+        # import ipdb; ipdb.set_trace()
         # x = self.proj_layer(x)
         
         means3D = self.mean3D_head(x)

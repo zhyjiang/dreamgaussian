@@ -47,7 +47,7 @@ class Trainer:
         # self.enable_sd = False
         # self.enable_zero123 = False
         
-        self.encoder = VertexTransformer()
+        self.encoder = VertexTransformer(upsample=self.opt.upsample).to(self.device)
 
         # renderer
         self.renderer = Renderer(sh_degree=self.opt.sh_degree)
@@ -60,6 +60,7 @@ class Trainer:
         self.input_mask_torch = None
         self.overlay_input_img = False
         self.overlay_input_img_ratio = 0.5
+        # self.alpha = torch.nn.Parameter(torch.tensor(0.5),requires_grad=True).to(self.device)
 
         # input text
         self.prompt = ""
@@ -232,7 +233,7 @@ class Trainer:
         ender = torch.cuda.Event(enable_timing=True)
         starter.record()
 
-        for _ in range(self.train_steps):
+        for epoch in range(self.train_steps):
 
             self.step += 1
             step_ratio = min(1, self.step / self.opt.iters)
@@ -246,7 +247,10 @@ class Trainer:
                 self.optimizer.zero_grad()
                 
                 vertices = data['vertices'].float().to(self.device)
+                    # import ipdb;ipdb.set_trace()
                 means3D, opacity, scales, shs, rotations = self.encoder(vertices)
+                if self.encoder.upsample != 1:
+                    vertices = vertices.repeat( 1,self.encoder.upsample, 1)
                 scales = scales * self.opt.scale_factor
                 mask = data['mask'].to(self.device)
                 gt_images = data['image'].to(self.device)
@@ -273,10 +277,11 @@ class Trainer:
                     depth = out['depth'].squeeze() # [H, W]
                     
                     # loss += self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
-                    if self.reg_loss is not None:
-                        loss += self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx]))
+                    if self.reg_loss is not None and epoch <=1 :
+                        loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 1.0
+                    # import ipdb;ipdb.set_trace()
                     if self.reconstruct_loss is not None:
-                        loss += self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
+                        loss = loss+self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
                     
                     if iter % 100 == 0 and idx == 0:
                         np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
@@ -285,7 +290,12 @@ class Trainer:
                         cv2.imwrite(f'./vis/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
                         plt.imsave(f'./vis_depth/{iter}.jpg', depth_img)
                 pbar.set_postfix({'Loss': f'{loss.item():.5f}'})
+                # import ipdb;ipdb.set_trace()
+                # pbar.set_postfix({'alpha': f'{self.alpha.item():.3f}'})
                 # optimize step
+                # import ipdb;ipdb.set_trace()
+                if epoch > 0 and loss.item() > 0.001:
+                    import ipdb;ipdb.set_trace()
                 loss.backward()
                 self.optimizer.step()
 
