@@ -35,3 +35,5 @@ rembg[gpu,cli]
 
 # gradio demo
 gradio
+kornia
+skimage
