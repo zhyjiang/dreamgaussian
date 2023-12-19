@@ -2,6 +2,7 @@
 outdir: logs
 mesh_format: obj
 save_path: checkpoints
+save_name: test
 save_interval: 50
 eval_interval: 1
 
@@ -10,11 +11,15 @@ eval_interval: 1
 dino:
   image_embed: True
   name: ViT-S
-  path: model/dino_deitsmall8_pretrain.pth
+  path: dino_vits16
 
-vis_path: vis
+vis_path: vis_res
 
-vis_depth_path: vis_depth
+vis_depth_path: vis_depth_res
+
+vis_eval: vis_eval_res
+
+vis_eval_depth_path: vis_eval_depth_res
 
 
 dataset:
@@ -26,10 +31,10 @@ dataset:
   # path: [377,386,387,394]
   test_path: [390,393]
   camera_list: [1]
-  num_workers: 5
+  num_workers: 4
   smpl_coord: True
-  sample_rate: 2
-  eval_sample_rate: 100
+  sample_rate: 1
+  eval_sample_rate: 80
 
 ### Training
 # guidance loss weights (0 to disable)
@@ -60,9 +65,9 @@ ssim_weight: 0.2
 
 scale_factor: 0.001
 
-smpl_reg_sacle: 0.01
+smpl_reg_scale: 0.01
 
-IOU_initial_weight : 0.1
+IOU_init_weight : 0.1
 
 IOU_weight: 0.002
 

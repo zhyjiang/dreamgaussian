@@ -21,6 +21,7 @@ from mesh import Mesh, safe_normalize
 from lib.model.vertex_encoder import VertexTransformer
 from lib.dataset.ZJU import ZJU
 from torch.optim.lr_scheduler import LambdaLR
+from torch.utils.tensorboard import SummaryWriter
 
 
 
@@ -50,7 +51,7 @@ class Trainer:
         self.near = opt.near
         self.far = opt.far
         # self.cam = OrbitCamera(opt.W, opt.H, r=opt.radius, fovy=opt.fovy)
-
+        self.writer = SummaryWriter('logs')
         self.mode = "image"
         self.seed = "random"
 
@@ -269,7 +270,10 @@ class Trainer:
         #     if self.enable_zero123:
         #         self.guidance_zero123.get_img_embeds(self.input_img_torch)
     
-    def eval(self):
+    def eval(self,ep):
+        os.makedirs(self.opt.vis_path,exist_ok=True)
+        os.makedirs(self.opt.vis_depth_path,exist_ok=True)
+        
         self.encoder.eval()
         
         with torch.no_grad():
@@ -335,7 +339,7 @@ class Trainer:
                         out = self.renderer.render(cam,
                                                 vertices[idx]+means3D[idx],
                                                 opacity[idx],
-                                                scales[idx] * 0.05,
+                                                scales[idx],
                                                 shs[idx][:, None, :],
                                                 rotations[idx],
                                                 bg_color=bg_color)
@@ -359,15 +363,20 @@ class Trainer:
                             
                         depth_img = depth.detach().cpu().numpy()
                         #     cv2.imwrite(f'./vis_temp/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
-                        plt.imsave(os.path.join(self.opt.vis_depth_path,f'{iter}.jpg'), depth_img)
-                        cv2.imwrite(os.path.join(self.opt.vis_path,f'{iter}.jpg'), np.concatenate((target_img, np_img), axis=1) * 255)
+                        plt.imsave(os.path.join(self.opt.vis_eval_depth_path,f'{iter}.jpg'), depth_img)
+                        cv2.imwrite(os.path.join(self.opt.vis_eval,f'{iter}.jpg'), np.concatenate((target_img, np_img), axis=1) * 255)
                         
                         pred_img_norm = np_img / np_img.max()
                         gt_img_norm = target_img / target_img.max()
                         
                         psnr_l.append(self.psnr_metric(pred_img_norm, gt_img_norm))
                         
-                        # ssim_l.append(skimage.metrics.structural_similarity(pred_img_norm, gt_img_norm, multichannel=True))    
+                        ssim_l.append(skimage.metrics.structural_similarity( gt_img_norm,pred_img_norm, multichannel=True,channel_axis=-1,data_range=1.0))   
+                        
+                self.writer.add_scalar('psnr', np.array(psnr_l).mean(),global_step=ep)
+                self.writer.add_scalar('ssim', np.array(ssim_l).mean(),global_step=ep)
+                
+          
                 # print(np.array(psnr_l).mean(), np.array(ssim_l).mean())
                 
             
@@ -382,7 +391,8 @@ class Trainer:
 
         
 
-    def train_step(self):
+    def train_step(self,ep):
+        
         starter = torch.cuda.Event(enable_timing=True)
         ender = torch.cuda.Event(enable_timing=True)
         starter.record()
@@ -392,11 +402,15 @@ class Trainer:
         
 
         for epoch in range(self.train_steps):
+            
+            os.makedirs(self.opt.vis_path,exist_ok=True)
+            os.makedirs(self.opt.vis_depth_path,exist_ok=True)
             print(self.optimizer.param_groups[0]['lr'])
             self.encoder.train()
 
             self.step += 1
             step_ratio = min(1, self.step / self.opt.iters)
+            overall_loss= 0
             # self.optimizer.zero_grad()
 
             # update lr
@@ -491,7 +505,7 @@ class Trainer:
                     if self.reconstruct_loss is not None:
                         loss = loss+self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
                     
-                    if iter % 50 == 0 and idx == 0:
+                    if iter % 100 == 0 and idx == 0:
                         np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
                         # import ipdb;ipdb.set_trace()
@@ -502,7 +516,8 @@ class Trainer:
                         # plt.scatter(data['vertices'].float()[...,0],data['vertices'].float()[...,1],c='r')
                         # import ipdb;ipdb.set_trace()
                         
-                        cv2.imwrite(f'./vis_proj/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
+                        cv2.imwrite(os.path.join(self.opt.vis_path,f'{iter}.jpg'), np.concatenate((target_img, np_img), axis=1) * 255)
+                        plt.imsave(os.path.join(self.opt.vis_depth_path,f'{iter}.jpg'), depth_img)
                         # cv2.imwrite(f'./vis_temp/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
                         # plt.savefig(f'./vis_proj/{iter}.jpg', target_img)
                         # cv2.imwrite(f'./vis_mask/{iter}.jpg', np.concatenate((target_img, masked), axis=1) * 255)
@@ -515,8 +530,14 @@ class Trainer:
                 if epoch > 0 and loss.item() > 0.001:
                     import ipdb;ipdb.set_trace()
                 loss.backward()
+                overall_loss+=loss.item()
                 self.optimizer.step()
-            self.scheduler.step()        
+                self.writer.add_scalar('Train/Loss', loss.item(), global_step=ep*len(self.dataloader)+iter)   
+              
+                 
+            self.scheduler.step()
+            self.writer.add_scalar('Train/Loss Epoch', overall_loss/len(self.dataloader), global_step=ep) 
+                
 
         ender.record()
         torch.cuda.synchronize()
@@ -530,6 +551,8 @@ class Trainer:
                 "_log_train_log",
                 f"step = {self.step: 5d} (+{self.train_steps: 2d}) loss = {loss.item():.4f}",
             )
+            
+        
 
         # dynamic train steps (no need for now)
         # max allowed train time per-frame is 500 ms
@@ -1124,23 +1147,25 @@ class Trainer:
         if iters > 0:
             self.prepare_train()
             for i in tqdm.trange(iters):
-                self.train_step()
+                self.train_step(i)
                 
                 
                 if i % self.opt.eval_interval == 0:
-                    self.eval()
+                    os.makedirs(os.path.join(self.opt.vis_eval_depth_path),exist_ok=True)
+                    os.makedirs(os.path.join(self.opt.vis_eval),exist_ok=True)
+                    self.eval(i)
                     
                         
                 
-                
+               
                 if i % self.opt.save_interval == 0:
                     # self.save_model(mode='model')
+                    os.makedirs(f'./checkpoints/{self.opt.save_path}/',exist_ok=True)
+                    os.makedirs(f'./checkpoints/{self.opt.save_path}/{self.opt.save_name}',exist_ok=True)
                     with torch.no_grad():
-                        torch.save(self.encoder.state_dict(), f'./checkpoints/{self.opt.save_path}.pth')
-               
+                        torch.save(self.encoder.state_dict(), f'./checkpoints/{self.opt.save_path}/{self.opt.save_name}/epoch{i}.pth')
+        self.writer.close()   
             # do a last prune
             # self.renderer.gaussians.prune(min_opacity=0.01, extent=1, max_screen_size=1)
         # save
-        self.save_model(mode='model')
-        self.save_model(mode='geo+tex')
-        
+    

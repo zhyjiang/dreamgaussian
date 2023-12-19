@@ -101,7 +101,9 @@ class VertexTransformer(nn.Module):
         self.pre_conv = nn.Conv1d(num_joints,self.downsample_dim, kernel_size=1)
         self.dino = dino
         if self.dino:
-            self.dino_encoder = torch.hub.load('facebookresearch/dino:main', 'dino_vits16').patch_embed.to(self.device)
+            
+            self.dino_encoder = torch.hub.load('facebookresearch/dino:main', self.dino.path).patch_embed.to(self.device)
+            
         
         self.encoder = Transformer(hidden_dim, num_layers, nhead, dim_head, mlp_dim, dropout)
         
