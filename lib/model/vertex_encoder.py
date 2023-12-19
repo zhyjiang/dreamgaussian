@@ -76,31 +76,46 @@ class Transformer(nn.Module):
         return x
 
 class VertexTransformer(nn.Module):
-    def __init__(self, hidden_dim=64, num_joints=6890, num_layers=3, pose_dim=2, nhead=4, dropout=0.1,
-                 dim_head=64, mlp_dim=64, has_bbox=False,upsample=1):
+    def __init__(self, hidden_dim=64, num_joints=6890, num_layers=2, pose_dim=3, nhead=4, dropout=0.1,
+                 dim_head=64, mlp_dim=64, has_bbox=False,upsample=1,downsample_dim = 1024,dino=False,device='cuda'):
         super().__init__()
         
         self.hidden_dim = hidden_dim
         self.num_joints = num_joints
         self.pose_dim = pose_dim
+        self.device = device
+        self.downsample_dim = downsample_dim
         
-        self.positional_emb = nn.Parameter(torch.randn((1, num_joints, hidden_dim)))
+        if dino:
+        
+            self.positional_emb = nn.Parameter(torch.randn((1, self.downsample_dim+4096, hidden_dim)),requires_grad=True)
+            self.upsample_conv = nn.Conv1d(downsample_dim+4096, num_joints*upsample, kernel_size=1) 
+        else:
+            self.positional_emb = nn.Parameter(torch.randn((1, num_joints, hidden_dim)),requires_grad=True)
+            self.upsample_conv = nn.Conv1d(num_joints, num_joints*upsample, kernel_size=1) if upsample!=1 else None
         # self.cls_token = nn.Parameter(torch.randn((hidden_dim)))
         self.proj_layer = nn.Linear(hidden_dim, hidden_dim, bias=False)
 
         self.pre_emb = nn.Linear(pose_dim, hidden_dim)
         self.pre_norm = nn.LayerNorm(hidden_dim)
+        self.pre_conv = nn.Conv1d(num_joints,self.downsample_dim, kernel_size=1)
+        self.dino = dino
+        if self.dino:
+            self.dino_encoder = torch.hub.load('facebookresearch/dino:main', 'dino_vits16').patch_embed.to(self.device)
         
         self.encoder = Transformer(hidden_dim, num_layers, nhead, dim_head, mlp_dim, dropout)
         
         self.dropout = nn.Dropout(dropout)
-        self.upsample_conv = nn.Conv1d(num_joints, num_joints*upsample, kernel_size=1) if upsample!=1 else None
+        
         self.has_bbox = has_bbox
         if has_bbox:
             self.bbox_tokenize = nn.Linear(4, hidden_dim, bias=False)
             
         self.mask_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         self.upsample = upsample
+        self.cam_proj = nn.Linear(4*4, 384)
+        self.img_down = nn.Linear(384,hidden_dim)
+        # self.img_downconv = nn.Conv1d(4096,2000,kernel_size=1)
         self.initialize_weights()
         
         self.mean3D_head = self._make_head(hidden_dim, 3)
@@ -117,7 +132,8 @@ class VertexTransformer(nn.Module):
         return layers    
     
     def initialize_weights(self):
-        pos_embed = get_1d_sincos_pos_embed(self.positional_emb.shape[-1], np.arange(self.num_joints))
+        # import ipdb;ipdb.set_trace()
+        pos_embed = get_1d_sincos_pos_embed(self.positional_emb.shape[-1], np.arange(self.positional_emb.shape[1]))
         self.positional_emb.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
         
         # torch.nn.init.normal_(self.cls_token, std=.02)
@@ -138,25 +154,49 @@ class VertexTransformer(nn.Module):
             if isinstance(m, nn.Conv1d) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         
-    def forward(self, x, mask_ratio=0.0):
+    def forward(self, x, img=None,cam=None,mask_ratio=0.0):
+        # import ipdb; ipdb.set_trace()
         mask = None
         if x.shape[-1] != self.pose_dim:
             mask = x[:, :, -1] == 0
             x = x[:, :, :-1]
+        if self.dino:
+            with torch.no_grad():
+                self.dino_encoder.eval()
+                img_emb = self.dino_encoder(img) # B*384
+              
+            assert cam is not None
+            cam_emb = self.cam_proj(cam.reshape(cam.shape[0],-1))[:,None,:]
+            emb = self.img_down(img_emb+ cam_emb) 
+            # emb = self.img_downconv(emb)
+           
+            
+            
+        # import ipdb; ipdb.set_trace() 
         x = self.pre_emb(x)
         x = self.pre_norm(x)
+        
         if mask is not None:
             x = self.masking(x, mask)
         # x = torch.cat((self.cls_token.repeat(x.shape[0], 1, 1), x), dim=1)
-        x = x + self.positional_emb
+       
+        
+        x = self.pre_conv(x)
+        if self.dino:
+            x = torch.cat((emb, x), dim=1)
+            # x = self.pre_conv(x)  # 6890+4096 -> 2000
+            
+        
+        # import ipdb; ipdb.set_trace()
+        x = x+self.positional_emb
         x = self.dropout(x)
         
         x = self.encoder(x)
         
-        if self.upsample != 1:
-            x = self.upsample_conv(x)
+        # if self.upsample != 1:
+        x = self.upsample_conv(x) # 2000+4096 -> 6890*n
         # import ipdb; ipdb.set_trace()
-        # x = self.proj_layer(x)
+       
         
         means3D = self.mean3D_head(x)
         # import ipdb; ipdb.set_trace()

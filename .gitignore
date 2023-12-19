@@ -23,3 +23,8 @@ videos/*
 images/*
 *.mp4
 test.jpg
+*.jpg
+*.pth
+*.a
+*.zip
+*

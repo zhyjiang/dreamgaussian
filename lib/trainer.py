@@ -2,6 +2,7 @@ import os
 import cv2
 from matplotlib import pyplot as plt
 import time
+import skimage
 import tqdm
 import numpy as np
 import dearpygui.dearpygui as dpg
@@ -19,6 +20,25 @@ from grid_put import mipmap_linear_grid_put_2d
 from mesh import Mesh, safe_normalize
 from lib.model.vertex_encoder import VertexTransformer
 from lib.dataset.ZJU import ZJU
+from torch.optim.lr_scheduler import LambdaLR
+
+
+
+
+class IoULoss(torch.nn.Module):
+    def __init__(self, smooth=1.0):
+        super(IoULoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, prediction, target):
+        intersection = torch.sum(prediction * target)
+        union = torch.sum(prediction) + torch.sum(target) - intersection
+
+        iou = (intersection + self.smooth) / (union + self.smooth)
+        loss = 1.0 - iou
+
+        return loss
+
 
 
 class Trainer:
@@ -47,7 +67,7 @@ class Trainer:
         # self.enable_sd = False
         # self.enable_zero123 = False
         
-        self.encoder = VertexTransformer(upsample=self.opt.upsample).to(self.device)
+        self.encoder = VertexTransformer(upsample=self.opt.upsample,dino=self.opt.dino,device=self.device).to(self.device)
 
         # renderer
         self.renderer = Renderer(sh_degree=self.opt.sh_degree)
@@ -60,25 +80,41 @@ class Trainer:
         self.input_mask_torch = None
         self.overlay_input_img = False
         self.overlay_input_img_ratio = 0.5
+        
+        
+          
+            
         # self.alpha = torch.nn.Parameter(torch.tensor(0.5),requires_grad=True).to(self.device)
 
         # input text
         self.prompt = ""
         self.negative_prompt = ""
+        
+        
 
         # training stuff
         self.training = False
         self.optimizer = None
         self.step = 0
         self.train_steps = 1  # steps per rendering loop
+        self.eval_steps = 1
         self.dataset = ZJU(opt)
+        self.test_dataset = ZJU(opt,'test')
         self.dataloader = torch.utils.data.DataLoader(self.dataset, 
+                                                      batch_size=opt.batch_size, 
+                                                      shuffle=True, 
+                                                      num_workers=0)
+        
+        self.testloader = torch.utils.data.DataLoader(self.test_dataset, 
                                                       batch_size=opt.batch_size, 
                                                       shuffle=False, 
                                                       num_workers=opt.dataset.num_workers)
         
+        print(f'data loader size: {len(self.dataloader.dataset)} and test data loader size: {len(self.testloader.dataset)}')
+        
         self.reconstruct_loss = None
         self.reg_loss = None
+        self.IOU_loss = None
        
         
         if self.gui:
@@ -99,29 +135,7 @@ class Trainer:
             return base_loss_fn
         else:
             raise NotImplementedError
-
-        def loss_fn(out, gt):
-            # import ipdb;ipdb.set_trace()
-            if len(gt.shape) != 4:
-                gt = gt.unsqueeze(0)
-            if len(out.shape) != 4:
-                out = out.unsqueeze(0)
-            if ssim_weight ==0 :
-                return base_loss_fn(out, gt)
-            
-            if out.shape[1] == 3:
-                out = out.reshape((1,1024,1024,-1))
-                gt = gt.reshape((1,1024,1024,-1))
-            loss = ssim_weight * ssim_loss(
-                out.moveaxis(-1, 1),
-                gt.moveaxis(-1, 1),
-                11,
-                reduction="mean",
-            ) + (1 - ssim_weight) * base_loss_fn(out, gt)
-
-            return loss
-
-        return loss_fn
+        
 
     def seed_everything(self):
         try:
@@ -137,12 +151,37 @@ class Trainer:
         torch.backends.cudnn.benchmark = True
 
         self.last_seed = seed
+        
+    def psnr_metric(self,img_pred, img_gt):
+        mse = np.mean((img_pred - img_gt)**2)
+        psnr = -10 * np.log(mse) / np.log(10)
+        return psnr
+    
+    # def IOU_silou_loss(self,mask1,mask2):
+    #     # Load mask images as NumPy arrays
 
+    #     # Calculate intersection and union
+    #     intersection = np.logical_and(mask1, mask2)
+    #     union = np.logical_or(mask1, mask2)
+
+    #     # Compute IoU
+    #     iou = np.sum(intersection) / np.sum(union)
+    #     return iou
+        
+
+    def lr_lambda(self,epoch):
+        if epoch < self.opt.warmup:
+            return self.opt.base_lr + (self.opt.lr - self.opt.base_lr) / self.opt.warmup * epoch
+            
+        else:
+            return self.opt.lr 
     def prepare_train(self):
 
         self.step = 0
 
-        self.optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.opt.lr)
+        self.optimizer = torch.optim.Adam(self.encoder.parameters(), lr=1.0)
+        self.scheduler = LambdaLR(self.optimizer, lr_lambda=self.lr_lambda)
+        
         self.encoder.to(self.device)
         
         
@@ -169,6 +208,8 @@ class Trainer:
             print('Using l1 reg loss.')
         else:
             print('No reg loss defined.')
+            
+        self.IOU_loss = IoULoss()
             
 
         # setup training
@@ -227,68 +268,245 @@ class Trainer:
 
         #     if self.enable_zero123:
         #         self.guidance_zero123.get_img_embeds(self.input_img_torch)
+    
+    def eval(self):
+        self.encoder.eval()
+        
+        with torch.no_grad():
+        
+            
+            for epoch in range(self.eval_steps):
+
+                
+
+                psnr_l = []
+                ssim_l = []
+                
+                pbar = tqdm.tqdm(self.testloader)
+                for iter, data in enumerate(pbar):
+                    # loss = 0
+                    # self.optimizer.zero_grad()
+                    # import ipdb;ipdb.set_trace()
+                    
+                    vertices = data['vertices'].float().to(self.device)
+                    
+                    gt_images = data['image'].to(self.device)
+                    mask = data['mask'].to(self.device)
+                    gt_images = gt_images * mask[:, None, :, :]
+                    
+                    cam_list = torch.zeros((len(data['w2c']),4,4)).to(self.device)
+                    
+                    for i in range(len(data['w2c'])):
+                        
+                    
+                        cam = MiniCam(
+                            data['w2c'][i],
+                            self.W,
+                            self.H,
+                            data['fovy'][i],
+                            data['fovx'][i],
+                            self.near,
+                            self.far,
+                        ) 
+                        
+                        cam_list[i] = cam.projection_matrix.to(self.device)
+                
+                    
+                    
+                    
+                    means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=gt_images,cam = cam_list)
+                    if self.encoder.upsample != 1:
+                        vertices = vertices.repeat( 1,self.encoder.upsample, 1)
+                    scales = scales * self.opt.scale_factor
+                    
+                    
+                    
+                    for idx in range(len(vertices)):
+                        cam = MiniCam(
+                            data['w2c'][idx],
+                            self.W,
+                            self.H,
+                            data['fovy'][idx],
+                            data['fovx'][idx],
+                            self.near,
+                            self.far,
+                        )
+                        bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
+                        out = self.renderer.render(cam,
+                                                vertices[idx]+means3D[idx],
+                                                opacity[idx],
+                                                scales[idx] * 0.05,
+                                                shs[idx][:, None, :],
+                                                rotations[idx],
+                                                bg_color=bg_color)
+                        image = out["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
+                        depth = out['depth'].squeeze() # [H, W]
+                        
+                        # loss += self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
+                        # if self.reg_loss is not None and epoch ==0 :
+                            # loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.02
+                        # else:
+                        #     loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.05
+                        # import ipdb;ipdb.set_trace()
+                        # if self.reconstruct_loss is not None:
+                        #     loss = loss+self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
+                        
+                        # if iter % 100 == 0 and idx == 0:
+                        np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
+                        target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
+                        #     # import ipdb;ipdb.set_trace()
+                        #     # masked = target_img * mask[0].cpu().numpy()[...,None]
+                            
+                        depth_img = depth.detach().cpu().numpy()
+                        #     cv2.imwrite(f'./vis_temp/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
+                        plt.imsave(os.path.join(self.opt.vis_depth_path,f'{iter}.jpg'), depth_img)
+                        cv2.imwrite(os.path.join(self.opt.vis_path,f'{iter}.jpg'), np.concatenate((target_img, np_img), axis=1) * 255)
+                        
+                        pred_img_norm = np_img / np_img.max()
+                        gt_img_norm = target_img / target_img.max()
+                        
+                        psnr_l.append(self.psnr_metric(pred_img_norm, gt_img_norm))
+                        
+                        # ssim_l.append(skimage.metrics.structural_similarity(pred_img_norm, gt_img_norm, multichannel=True))    
+                # print(np.array(psnr_l).mean(), np.array(ssim_l).mean())
+                
+            
+            
+                        
+                # pbar.set_postfix({'Loss': f'{loss.item():.5f}'})
+                # import ipdb;ipdb.set_trace()
+                # pbar.set_postfix({'alpha': f'{self.alpha.item():.3f}'})
+                # optimize step
+                # import ipdb;ipdb.set_trace()
+                
+
+        
 
     def train_step(self):
         starter = torch.cuda.Event(enable_timing=True)
         ender = torch.cuda.Event(enable_timing=True)
         starter.record()
+        
+        linear_schedule = torch.arange(2,0,-0.2)
+       
+        
 
         for epoch in range(self.train_steps):
+            print(self.optimizer.param_groups[0]['lr'])
+            self.encoder.train()
 
             self.step += 1
             step_ratio = min(1, self.step / self.opt.iters)
-            self.optimizer.zero_grad()
+            # self.optimizer.zero_grad()
 
             # update lr
             # self.renderer.gaussians.update_learning_rate(self.step)
             pbar = tqdm.tqdm(self.dataloader)
             for iter, data in enumerate(pbar):
+                # import ipdb;ipdb.set_trace()
                 loss = 0
                 self.optimizer.zero_grad()
+               
                 
                 vertices = data['vertices'].float().to(self.device)
-                    # import ipdb;ipdb.set_trace()
-                means3D, opacity, scales, shs, rotations = self.encoder(vertices)
+                
+                gt_images = data['image'].to(self.device)
+                mask = data['mask'].to(self.device)
+                gt_images = gt_images * mask[:, None, :, :]
+                
+                cam_list = torch.zeros((len(data['w2c']),4,4)).to(self.device)
+                
+                for i in range(len(data['w2c'])):
+                    
+                
+                    cam = MiniCam(
+                        data['w2c'][i],
+                        self.W,
+                        self.H,
+                        data['fovy'][i],
+                        data['fovx'][i],
+                        self.near,
+                        self.far,
+                    ) 
+                    
+                    cam_list[i] = cam.projection_matrix.to(self.device)
+               
+                
+                
+                
+                means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=gt_images,cam = cam_list)
                 if self.encoder.upsample != 1:
                     vertices = vertices.repeat( 1,self.encoder.upsample, 1)
                 scales = scales * self.opt.scale_factor
-                mask = data['mask'].to(self.device)
-                gt_images = data['image'].to(self.device)
-                gt_images = gt_images * mask[:, None, :, :]
-                for idx in range(self.opt.batch_size):
-                    cam = MiniCam(
-                        data['w2c'][idx],
-                        self.W,
-                        self.H,
-                        data['fovy'][idx],
-                        data['fovx'][idx],
-                        self.near,
-                        self.far,
-                    )
+                
+                for idx in range(len(vertices)):
+                    try:
+                        cam = MiniCam(
+                            data['w2c'][idx],
+                            self.W,
+                            self.H,
+                            data['fovy'][idx],
+                            data['fovx'][idx],
+                            self.near,
+                            self.far,
+                        )
+                    except:
+                        import ipdb;ipdb.set_trace()
                     bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
                     out = self.renderer.render(cam,
                                                vertices[idx]+means3D[idx],
                                                opacity[idx],
-                                               scales[idx] * 0.05,
+                                               scales[idx] ,
                                                shs[idx][:, None, :],
                                                rotations[idx],
                                                bg_color=bg_color)
                     image = out["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
                     depth = out['depth'].squeeze() # [H, W]
                     
+                    std = torch.std(vertices[idx],dim=1)
+                    image_mask = image.clone()
+                    image_mask[image_mask>0] = 1
+                    
                     # loss += self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
-                    if self.reg_loss is not None and epoch <=1 :
-                        loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 1.0
+                    if self.reg_loss is not None and epoch ==0 :
+                        # loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.05
+                        loss = loss+ self.reg_loss(means3D[idx], torch.rand_like(means3D[idx])*torch.mean(std)*0.5) *self.opt.smpl_reg_scale 
+                        loss = loss+ self.IOU_loss(image_mask[0,0],mask[idx]) * self.opt.IOU_init_weight
+                    else:
+                        loss = loss+ self.IOU_loss(image_mask[0,0],mask[idx]) * self.opt.IOU_weight
+                        
+                        
+                    
+                    # import ipdb;ipdb.set_trace()
+                    
+                    # else:
+                        # loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.1
+                        # linear_schedule[min(epoch,19)]
+                        
+                    # elif self.reg_loss is not None and epoch >2 and epoch <= 5 :
+                        # loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.8
+                    # else:
+                    #     loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.2
                     # import ipdb;ipdb.set_trace()
                     if self.reconstruct_loss is not None:
                         loss = loss+self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
                     
-                    if iter % 100 == 0 and idx == 0:
+                    if iter % 50 == 0 and idx == 0:
                         np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
+                        # import ipdb;ipdb.set_trace()
+                        # masked = target_img * mask[0].cpu().numpy()[...,None]
+                        
                         depth_img = depth.detach().cpu().numpy()
-                        cv2.imwrite(f'./vis/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
-                        plt.imsave(f'./vis_depth/{iter}.jpg', depth_img)
+                        # plt.imshow(target_img)
+                        # plt.scatter(data['vertices'].float()[...,0],data['vertices'].float()[...,1],c='r')
+                        # import ipdb;ipdb.set_trace()
+                        
+                        cv2.imwrite(f'./vis_proj/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
+                        # cv2.imwrite(f'./vis_temp/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
+                        # plt.savefig(f'./vis_proj/{iter}.jpg', target_img)
+                        # cv2.imwrite(f'./vis_mask/{iter}.jpg', np.concatenate((target_img, masked), axis=1) * 255)
+                        
                 pbar.set_postfix({'Loss': f'{loss.item():.5f}'})
                 # import ipdb;ipdb.set_trace()
                 # pbar.set_postfix({'alpha': f'{self.alpha.item():.3f}'})
@@ -298,6 +516,7 @@ class Trainer:
                     import ipdb;ipdb.set_trace()
                 loss.backward()
                 self.optimizer.step()
+            self.scheduler.step()        
 
         ender.record()
         torch.cuda.synchronize()
@@ -897,6 +1116,8 @@ class Trainer:
                 self.train_step()
             self.test_step()
             dpg.render_dearpygui_frame()
+            
+        
     
     # no gui mode
     def train(self, iters=500):
@@ -904,6 +1125,19 @@ class Trainer:
             self.prepare_train()
             for i in tqdm.trange(iters):
                 self.train_step()
+                
+                
+                if i % self.opt.eval_interval == 0:
+                    self.eval()
+                    
+                        
+                
+                
+                if i % self.opt.save_interval == 0:
+                    # self.save_model(mode='model')
+                    with torch.no_grad():
+                        torch.save(self.encoder.state_dict(), f'./checkpoints/{self.opt.save_path}.pth')
+               
             # do a last prune
             # self.renderer.gaussians.prune(min_opacity=0.01, extent=1, max_screen_size=1)
         # save
