@@ -78,7 +78,7 @@ class Trainer:
         # self.enable_zero123 = False
         img_emb_dim = self.data_config.img_emb_dim
         
-        self.encoder = VertexTransformer(upsample=self.opt.upsample,dino=self.opt.dino,img_dim=img_emb_dim,param_input=self.opt.param_input,cross_attention=self.opt.cross_attn,pose_dim=self.data_config.pose_dim,device=self.device).to(self.device)
+        self.encoder = VertexTransformer(upsample=self.opt.upsample,dino=self.opt.dino,img_dim=img_emb_dim,param_input=self.opt.param_input,cross_attention=self.opt.cross_attn,pose_num=self.data_config.pose_num,device=self.device).to(self.device)
 
         # renderer
         self.renderer = Renderer(sh_degree=self.opt.sh_degree)

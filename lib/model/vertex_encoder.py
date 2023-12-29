@@ -160,9 +160,15 @@ class VertexTransformer(nn.Module):
         self.cross_attention=cross_attention
         
         if dino:
+            if self.cross_attention:
             
-            self.positional_emb = nn.Parameter(torch.randn((1, self.downsample_dim, hidden_dim)),requires_grad=True)
-            self.upsample_conv = nn.Conv1d(downsample_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
+            
+            
+                self.positional_emb = nn.Parameter(torch.randn((1, self.downsample_dim, hidden_dim)),requires_grad=True)
+                self.upsample_conv = nn.Conv1d(downsample_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
+            else:
+                self.positional_emb = nn.Parameter(torch.randn((1, self.downsample_dim+img_dim, hidden_dim)),requires_grad=True)
+                self.upsample_conv = nn.Conv1d(downsample_dim+img_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
         else:
             self.positional_emb = nn.Parameter(torch.randn((1, self.downsample_dim, hidden_dim)),requires_grad=True)
             self.upsample_conv = nn.Conv1d(self.downsample_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
@@ -182,12 +188,12 @@ class VertexTransformer(nn.Module):
         else:
             self.pre_conv = nn.Conv1d(num_joints,self.downsample_dim, kernel_size=1)
         
-        self.downsamnple_conv = nn.Conv1d(img_dim, img_dim//2, kernel_size=1)
+        # self.downsamnple_conv = nn.Conv1d(img_dim, img_dim//2, kernel_size=1)
         
         if self.param_input:
             self.shape = nn.Linear(10, hidden_dim, bias=False)
             
-            self.pose = nn.Linear(pose_dim*3, hidden_dim, bias=False)
+            self.pose = nn.Linear(pose_num*3, hidden_dim, bias=False)
             self.rotate = nn.Linear(3, hidden_dim, bias=False)
             self.trans = nn.Linear(3, hidden_dim, bias=False)
         self.dino = dino

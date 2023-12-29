@@ -37,10 +37,10 @@ dataset:
   smpl_coord: True
   sample_rate: 2
   eval_sample_rate: 80
-  img_emb_dim: 1849  #4096
+  img_emb_dim: 4096 #4096
   H: 1024
   W: 1024
-  pose_dim: 24
+  pose_num: 24
 
 
 dataset2:
@@ -54,7 +54,7 @@ dataset2:
   img_emb_dim:  8040
   H: 1080
   W: 1920
-  pose_dim: 23
+  pose_num: 23
 
 
 
