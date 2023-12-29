@@ -2,42 +2,65 @@
 outdir: logs
 mesh_format: obj
 save_path: checkpoints
-save_name: test
-save_interval: 50
+save_name: test_humman_cross_test
+save_interval: 25
 eval_interval: 1
 
 ### Dataset
 
+param_input: True
+
+crop_image: False
 dino:
   image_embed: True
   name: ViT-S
   path: dino_vits16
 
-vis_path: vis_res
+vis_path: vis_res_test
 
-vis_depth_path: vis_depth_res
+vis_depth_path: vis_depth_test
 
-vis_eval: vis_eval_res
+vis_eval: vis_eval_res_test
 
-vis_eval_depth_path: vis_eval_depth_res
-
-
+vis_eval_depth_path: vis_eval_depth_test
+dataset_type:  ZJU
 dataset:
-  name: ZJU
+  name: ZJU  #HuMMan
   # path: [./data/ZJUMOCAP/CoreView_313, ./data/ZJUMOCAP/CoreView_314, ./data/ZJUMOCAP/CoreView_315, ./data/ZJUMOCAP/CoreView_316, ./data/ZJUMOCAP/CoreView_317, ./data/ZJUMOCAP/CoreView_318, ./data/ZJUMOCAP/CoreView_319, ./data/ZJUMOCAP/CoreView_320, ./data/ZJUMOCAP/CoreView_321, ./data/ZJUMOCAP/CoreView_322, ./data/ZJUMOCAP/CoreView_323, ./data/ZJUMOCAP/CoreView_324, ./data/ZJUMOCAP/CoreView_325, ./data/ZJUMOCAP/CoreView_326, ./data/ZJUMOCAP/CoreView_327, ./data/ZJUMOCAP/CoreView_328, ./data/ZJUMOCAP/CoreView_329, ./data/ZJUMOCAP/CoreView_330, ./data/ZJUMOCAP/CoreView_331, ./data/ZJUMOCAP/CoreView_332, ./data/ZJUMOCAP/CoreView_333, ./data/ZJUMOCAP/CoreView_334, ./data/ZJUMOCAP/CoreView_335, ./data/ZJUMOCAP/CoreView_336, ./data/ZJUMOCAP/CoreView_337, ./data/ZJUMOCAP/CoreView_338, ./data/ZJUMOCAP/CoreView_339, ./data/ZJUMOCAP/CoreView_340, ./data/ZJUMOCAP/CoreView_341, ./data/ZJUMOCAP/CoreView_342, ./data/ZJUMOCAP/CoreView_343, ./data/ZJUMOCAP/CoreView_344, ./data/ZJUMOCAP/CoreView_345, ./data/ZJUMOCAP/CoreView_346, ./data/ZJUMOCAP/CoreView_347, ./data/ZJUMOCAP/CoreView_348, ./data/ZJUMOCAP/CoreView_349, ./data/ZJUMOCAP/CoreView_350, ./data/ZJUMOCAP/CoreView_351, ./data/ZJUMOCAP/CoreView_352, ./data/ZJUMOCAP/CoreView_353, ./data/ZJUMOCAP/CoreView_354, ./data/ZJUMOCAP/Core
   # camera_list: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\
-  root: ./data/ZJUMOCAP/
+  root: ./data/ZJUMOCAP/ 
   path: [377, 386, 387,392,394]
   # path: [377,386,387,394]
   test_path: [390,393]
   camera_list: [1]
-  num_workers: 4
+  num_workers: 0
   smpl_coord: True
-  sample_rate: 1
+  sample_rate: 2
   eval_sample_rate: 80
+  img_emb_dim: 1849  #4096
+  H: 1024
+  W: 1024
+  pose_dim: 24
+
+
+dataset2:
+  name: HuMMan
+  smpl_path : SMPL/ROMP_SMPL/SMPL_NEUTRAL.pth
+  root: /mnt/nvme/Dataset/HuMMan/
+  split: train
+  multi_person: True
+  num_workers: 8
+  num_instances: 1
+  img_emb_dim:  8040
+  H: 1080
+  W: 1920
+  pose_dim: 23
+
+
 
 ### Training
 # guidance loss weights (0 to disable)
+cross_attn: True
 lambda_sd: 1
 mvdream: False
 lambda_zero123: 0
@@ -45,6 +68,7 @@ lambda_zero123: 0
 batch_size: 2
 # training iterations for stage 1
 iters: 1000
+
 multi_view: False
 # whether to linearly anneal timestep
 anneal_timestep: True
@@ -63,13 +87,13 @@ invert_bg_prob: 0.5
 
 ssim_weight: 0.2
 
-scale_factor: 0.001
+scale_factor: 0.0005 #0.001
 
-smpl_reg_scale: 0.01
+smpl_reg_scale:  0.005 # 0.01
 
 IOU_init_weight : 0.1
 
-IOU_weight: 0.002
+IOU_weight: 0.005
 
 upsample: 4 # 1
 
@@ -78,16 +102,17 @@ reg_loss: l2 # [l1 l2 or None]
 
 
 
-lr: 0.001
-base_lr: 0.0002
-warmup: 10
+lr: 0.0005
+base_lr: 0.0001 #0.0001
+warmup: 5
 
 ### GUI
 gui: False
 force_cuda_rast: False
 # GUI resolution
-H: 1024
-W: 1024
+# H: 1024
+
+# W: 1024
 near: 0.1
 far: 100
 

@@ -20,6 +20,7 @@ from grid_put import mipmap_linear_grid_put_2d
 from mesh import Mesh, safe_normalize
 from lib.model.vertex_encoder import VertexTransformer
 from lib.dataset.ZJU import ZJU
+from lib.dataset.HuMMan import HuMManDatasetBatch
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 
@@ -27,7 +28,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 class IoULoss(torch.nn.Module):
-    def __init__(self, smooth=1.0):
+    def __init__(self, smooth=0.0):
         super(IoULoss, self).__init__()
         self.smooth = smooth
 
@@ -46,12 +47,20 @@ class Trainer:
     def __init__(self, opt):
         self.opt = opt  # shared with the trainer's opt to support in-place modification of rendering parameters.
         self.gui = opt.gui # enable gui
-        self.W = opt.W
-        self.H = opt.H
+        
+        if self.opt.dataset_type == 'ZJU':
+            self.data_config = self.opt.dataset
+        else:
+            self.data_config = self.opt.dataset2
+            
+            
+        self.W = self.data_config.W
+        self.H = self.data_config.H
         self.near = opt.near
         self.far = opt.far
         # self.cam = OrbitCamera(opt.W, opt.H, r=opt.radius, fovy=opt.fovy)
-        self.writer = SummaryWriter('logs')
+        os.makedirs(os.path.join('logs',self.opt.save_name),exist_ok=True)
+        self.writer = SummaryWriter(os.path.join('logs',self.opt.save_name))
         self.mode = "image"
         self.seed = "random"
 
@@ -67,8 +76,9 @@ class Trainer:
 
         # self.enable_sd = False
         # self.enable_zero123 = False
+        img_emb_dim = self.data_config.img_emb_dim
         
-        self.encoder = VertexTransformer(upsample=self.opt.upsample,dino=self.opt.dino,device=self.device).to(self.device)
+        self.encoder = VertexTransformer(upsample=self.opt.upsample,dino=self.opt.dino,img_dim=img_emb_dim,param_input=self.opt.param_input,cross_attention=self.opt.cross_attn,pose_dim=self.data_config.pose_dim,device=self.device).to(self.device)
 
         # renderer
         self.renderer = Renderer(sh_degree=self.opt.sh_degree)
@@ -99,17 +109,48 @@ class Trainer:
         self.step = 0
         self.train_steps = 1  # steps per rendering loop
         self.eval_steps = 1
-        self.dataset = ZJU(opt)
-        self.test_dataset = ZJU(opt,'test')
-        self.dataloader = torch.utils.data.DataLoader(self.dataset, 
+        # import ipdb;ipdb.set_trace()
+        # self.dataset = ZJU(opt)
+        if self.opt.dataset_type == 'ZJU':
+            self.dataset = ZJU(opt,'train')
+            self.test_dataset = ZJU(opt,'test')
+            self.dataloader = torch.utils.data.DataLoader(self.dataset, 
                                                       batch_size=opt.batch_size, 
                                                       shuffle=True, 
-                                                      num_workers=0)
+                                                      num_workers=opt.dataset.num_workers)
         
-        self.testloader = torch.utils.data.DataLoader(self.test_dataset, 
+            self.testloader = torch.utils.data.DataLoader(self.test_dataset, 
                                                       batch_size=opt.batch_size, 
                                                       shuffle=False, 
                                                       num_workers=opt.dataset.num_workers)
+            
+        elif self.opt.dataset_type == 'HuMMan':
+            
+        
+        
+            self.dataset2 = HuMManDatasetBatch(data_root=self.opt.dataset2.root,split='train')
+            
+            self.test_dataset2 = HuMManDatasetBatch(data_root=self.opt.dataset2.root,split='test')
+            # self.test_dataset = ZJU(opt,'test')
+            self.dataloader = torch.utils.data.DataLoader(self.dataset2, 
+                                                        batch_size=opt.batch_size, 
+                                                        shuffle=True, 
+                                                        num_workers=opt.dataset.num_workers)
+            self.testloader = torch.utils.data.DataLoader(self.test_dataset2, 
+                                                        batch_size=opt.batch_size, 
+                                                        shuffle=False, 
+                                                        num_workers=opt.dataset.num_workers)
+        
+        
+        # self.dataloader = torch.utils.data.DataLoader(self.dataset, 
+        #                                               batch_size=opt.batch_size, 
+        #                                               shuffle=True, 
+        #                                               num_workers=0)
+        
+        # self.testloader = torch.utils.data.DataLoader(self.test_dataset, 
+        #                                               batch_size=opt.batch_size, 
+        #                                               shuffle=False, 
+        #                                               num_workers=opt.dataset.num_workers)
         
         print(f'data loader size: {len(self.dataloader.dataset)} and test data loader size: {len(self.testloader.dataset)}')
         
@@ -294,11 +335,12 @@ class Trainer:
                     
                     vertices = data['vertices'].float().to(self.device)
                     
-                    gt_images = data['image'].to(self.device)
-                    mask = data['mask'].to(self.device)
+                    gt_images = data['image'].float().to(self.device)
+                    mask = data['mask'].float().to(self.device)
                     gt_images = gt_images * mask[:, None, :, :]
                     
                     cam_list = torch.zeros((len(data['w2c']),4,4)).to(self.device)
+                    full_proj_cam_list = torch.zeros((len(data['w2c']),4,4)).to(self.device)
                     
                     for i in range(len(data['w2c'])):
                         
@@ -314,11 +356,24 @@ class Trainer:
                         ) 
                         
                         cam_list[i] = cam.projection_matrix.to(self.device)
-                
+                        full_proj_cam_list[i] = cam.full_proj_transform.to(self.device)
+                        
+                        
+                    if self.opt.param_input:
+                        smpl_params = data['smpl_param']
+                    # import ipdb;ipdb.set_trace()
                     
+                        pose = smpl_params['poses'].float().to(self.device)
+                        shape = smpl_params['shapes'].float().to(self.device)
+                        trans = smpl_params['Th'].float().to(self.device)
+                        rot = smpl_params['Rh'].float().to(self.device)   
                     
+                    if self.opt.param_input:
+                    # import ipdb;ipdb.set_trace()
+                        means3D, opacity, scales, shs, rotations = self.encoder((pose,shape,rot,trans),img=gt_images,cam = full_proj_cam_list)
                     
-                    means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=gt_images,cam = cam_list)
+                    else:
+                        means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=gt_images,cam = cam_list)
                     if self.encoder.upsample != 1:
                         vertices = vertices.repeat( 1,self.encoder.upsample, 1)
                     scales = scales * self.opt.scale_factor
@@ -358,6 +413,7 @@ class Trainer:
                         # if iter % 100 == 0 and idx == 0:
                         np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
+                        
                         #     # import ipdb;ipdb.set_trace()
                         #     # masked = target_img * mask[0].cpu().numpy()[...,None]
                             
@@ -400,7 +456,7 @@ class Trainer:
         linear_schedule = torch.arange(2,0,-0.2)
        
         
-
+        world_vertex = {}
         for epoch in range(self.train_steps):
             
             os.makedirs(self.opt.vis_path,exist_ok=True)
@@ -420,15 +476,38 @@ class Trainer:
                 # import ipdb;ipdb.set_trace()
                 loss = 0
                 self.optimizer.zero_grad()
-               
                 
-                vertices = data['vertices'].float().to(self.device)
                 
-                gt_images = data['image'].to(self.device)
-                mask = data['mask'].to(self.device)
-                gt_images = gt_images * mask[:, None, :, :]
+                vertices = data['vertices'].float().to(self.device).squeeze()
+                
+                if 'smpl_param' in data.keys():
+                
+                    smpl_params = data['smpl_param']
+                    # import ipdb;ipdb.set_trace()
+                    
+                    pose = smpl_params['poses'].float().to(self.device)
+                    shape = smpl_params['shapes'].float().to(self.device)
+                    trans = smpl_params['Th'].float().to(self.device)
+                    rot = smpl_params['Rh'].float().to(self.device)  
+                
+              
+                # bbox = data['bbox']
+                
+                
+                
+                
+                gt_images = data['image'].float().to(self.device)
+                if len(gt_images.shape) > 4:
+                    gt_images = gt_images.squeeze()
+                
+                mask = data['mask'].float().to(self.device)
+                if len(mask.shape) != len(gt_images.shape):
+                    gt_images = gt_images * mask[:, None, :, :]
+                else:
+                    gt_images = gt_images * mask
                 
                 cam_list = torch.zeros((len(data['w2c']),4,4)).to(self.device)
+                full_proj_cam_list = torch.zeros((len(data['w2c']),4,4)).to(self.device)
                 
                 for i in range(len(data['w2c'])):
                     
@@ -444,15 +523,35 @@ class Trainer:
                     ) 
                     
                     cam_list[i] = cam.projection_matrix.to(self.device)
-               
+                    
+                    full_proj_cam_list[i] = cam.full_proj_transform.to(self.device)
+                # crop_imgs = []    
+                # temp = torch.zeros((len(bbox),3,1000,1000)).to(self.device)
+                # import ipdb;ipdb.set_trace()
+                # if self.opt.crop_image and bbox is not None:
+                    
+                #     for index in range(len(bbox)):
+                #         import ipdb;ipdb.set_trace()
+                #         cropped = gt_images[index,...,bbox[index,2]:bbox[index,0],bbox[index,3]:bbox[index,1]]
+                        
+                #         x = (900//2 - (bbox[index,0]-bbox[index,2])//2).int()
+                #         y = (900//2 - (bbox[index,1]-bbox[index,2])//2).int()
+                #         try:
+                #             temp[index][...,x:x+(bbox[index,0]-bbox[index,2]), y: y+(bbox[index,1]-bbox[index,3])] = cropped
+                #         except:
+                #             import ipdb;ipdb.set_trace()
                 
-                
-                
-                means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=gt_images,cam = cam_list)
+                    # crop_imgs = torch.stack(crop_imgs,dim=0)
+                # import ipdb;ipdb.set_trace()
+                if self.opt.param_input:
+                    means3D, opacity, scales, shs, rotations = self.encoder((pose,shape,rot,trans),img=gt_images,cam = full_proj_cam_list)
+                else:  
+                    means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=gt_images,cam = cam_list)
+                # import ipdb;ipdb.set_trace()
                 if self.encoder.upsample != 1:
                     vertices = vertices.repeat( 1,self.encoder.upsample, 1)
                 scales = scales * self.opt.scale_factor
-                
+                # import ipdb;ipdb.set_trace()
                 for idx in range(len(vertices)):
                     try:
                         cam = MiniCam(
@@ -474,18 +573,25 @@ class Trainer:
                                                shs[idx][:, None, :],
                                                rotations[idx],
                                                bg_color=bg_color)
-                    image = out["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
+                    image = out["image"] # [1, 3, H, W] in [0, 1]
                     depth = out['depth'].squeeze() # [H, W]
+                    # import ipdb;ipdb.set_trace()
                     
-                    std = torch.std(vertices[idx],dim=1)
-                    image_mask = image.clone()
-                    image_mask[image_mask>0] = 1
+                    
+                    # smpl_image = smpl_out["image"].unsqueeze(0) 
+                    
+                    
+                    
+                    # std = torch.std(vertices[idx],dim=1)
+                    # image_mask = image.clone()
+                    # image_mask[image_mask>0] = 1
                     
                     # loss += self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
-                    if self.reg_loss is not None and epoch ==0 :
-                        # loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.05
-                        loss = loss+ self.reg_loss(means3D[idx], torch.rand_like(means3D[idx])*torch.mean(std)*0.5) *self.opt.smpl_reg_scale 
-                        loss = loss+ self.IOU_loss(image_mask[0,0],mask[idx]) * self.opt.IOU_init_weight
+                    if self.reg_loss is not None and epoch == 0:
+                        # loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) 
+                        # loss = loss+ self.reg_loss(means3D[idx], torch.rand_like(means3D[idx])*torch.mean(std)*0.5) *self.opt.smpl_reg_scale 
+                        loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) *self.opt.smpl_reg_scale 
+                    #     # loss = loss+ self.IOU_loss(image_mask[0,0],mask[idx]) * self.opt.IOU_init_weight
                     else:
                         loss = loss+ self.IOU_loss(image_mask[0,0],mask[idx]) * self.opt.IOU_weight
                         
@@ -503,23 +609,29 @@ class Trainer:
                     #     loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.2
                     # import ipdb;ipdb.set_trace()
                     if self.reconstruct_loss is not None:
-                        loss = loss+self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
+                        loss = loss+self.reconstruct_loss(image * mask[idx:idx+1, None,:, :], gt_images[idx:idx+1])
                     
                     if iter % 100 == 0 and idx == 0:
-                        np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
+                        np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
+                        # smpl_image = smpl_image[0].detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
-                        # import ipdb;ipdb.set_trace()
+                        
                         # masked = target_img * mask[0].cpu().numpy()[...,None]
                         
                         depth_img = depth.detach().cpu().numpy()
+                        
+                        # proj = (cam_list[idx] @ vertices[idx].T).T
+                        # proj[:, :2] /= proj[:, 2:]
                         # plt.imshow(target_img)
                         # plt.scatter(data['vertices'].float()[...,0],data['vertices'].float()[...,1],c='r')
                         # import ipdb;ipdb.set_trace()
                         
-                        cv2.imwrite(os.path.join(self.opt.vis_path,f'{iter}.jpg'), np.concatenate((target_img, np_img), axis=1) * 255)
+                        cv2.imwrite(os.path.join(self.opt.vis_path,f'{iter}.jpg'), np.concatenate((target_img, np_img), axis=1)*255.0)
                         plt.imsave(os.path.join(self.opt.vis_depth_path,f'{iter}.jpg'), depth_img)
+                        
+                        # plt.scatter(proj[:,0],proj[:,1],c='r')
                         # cv2.imwrite(f'./vis_temp/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
-                        # plt.savefig(f'./vis_proj/{iter}.jpg', target_img)
+                        # plt.savefig(os.path.join(self.opt.vis_path,f'test_{iter}.jpg'), proj)
                         # cv2.imwrite(f'./vis_mask/{iter}.jpg', np.concatenate((target_img, masked), axis=1) * 255)
                         
                 pbar.set_postfix({'Loss': f'{loss.item():.5f}'})
