@@ -16,7 +16,7 @@ data??
 scripts2
 
 model_cache
-SMPL/*
+
 
 logs*
 videos/*
@@ -27,4 +27,3 @@ test.jpg
 *.pth
 *.a
 *.zip
-*
