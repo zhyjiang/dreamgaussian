@@ -148,7 +148,7 @@ class Transformer(nn.Module):
 
 class VertexTransformer(nn.Module):
     def __init__(self, hidden_dim=64, num_joints=6890, num_layers=2, pose_dim=3, nhead=4, dropout=0.1,
-                 dim_head=64, mlp_dim=64, has_bbox=False,upsample=1,downsample_dim = 1024,dino=False,img_dim=4096,param_input=False,cross_attention=False,pose_num=24,device='cuda'):
+                 dim_head=64, mlp_dim=64, has_bbox=False,upsample=1,downsample_dim = 1024,dino=False,img_dim=4096,param_input=False,cross_attention=False,pose_num=24,multi_view=1,device='cuda'):
         super().__init__()
         
         self.hidden_dim = hidden_dim
@@ -158,19 +158,20 @@ class VertexTransformer(nn.Module):
         self.downsample_dim = downsample_dim
         self.param_input = param_input
         self.cross_attention=cross_attention
+        self.multi_view = multi_view
         
         if dino:
             if self.cross_attention:
             
             
             
-                self.positional_emb = nn.Parameter(torch.randn((1, self.downsample_dim, hidden_dim)),requires_grad=True)
+                self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim, hidden_dim)),requires_grad=True)
                 self.upsample_conv = nn.Conv1d(downsample_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
             else:
-                self.positional_emb = nn.Parameter(torch.randn((1, self.downsample_dim+img_dim, hidden_dim)),requires_grad=True)
+                self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim+img_dim, hidden_dim)),requires_grad=True)
                 self.upsample_conv = nn.Conv1d(downsample_dim+img_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
         else:
-            self.positional_emb = nn.Parameter(torch.randn((1, self.downsample_dim, hidden_dim)),requires_grad=True)
+            self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim, hidden_dim)),requires_grad=True)
             self.upsample_conv = nn.Conv1d(self.downsample_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
         # self.cls_token = nn.Parameter(torch.randn((hidden_dim)))
         
@@ -205,6 +206,8 @@ class VertexTransformer(nn.Module):
         self.encoder = Transformer(hidden_dim, num_layers, nhead, dim_head, mlp_dim, cross=self.cross_attention,dropout=dropout)
         
         self.dropout = nn.Dropout(dropout)
+        
+        self.merge_views = nn.Conv1d(multi_view, 1, kernel_size=1) if multi_view>1 else None
         
         self.has_bbox = has_bbox
         if has_bbox:
@@ -257,29 +260,23 @@ class VertexTransformer(nn.Module):
         
         mask = None
        
-        # import ipdb; ipdb.set_trace()
         if self.dino:
             with torch.no_grad():
                 self.dino_encoder.eval()
                 img_emb = self.dino_encoder(img) # B*384
               
             assert cam is not None
-            # import ipdb; ipdb.set_trace()
             cam_emb = self.cam_proj(cam.reshape(cam.shape[0],-1))[:,None,:]
             emb = self.img_down(img_emb+ cam_emb) 
-            # import ipdb; ipdb.set_trace()
             # emb = self.downsamnple_conv(emb)
             # emb = self.img_downconv(emb)
            
             
-        # import ipdb; ipdb.set_trace()    
-        # import ipdb; ipdb.set_trace() 
         if self.param_input:
             pose = x[0]
             shape = x[1]
             rot = x[2]
             trans = x[3]
-            # import ipdb; ipdb.set_trace()
             pose = self.pose(pose)
             shape = self.shape(shape)
             rot = self.rotate(rot)  
@@ -290,51 +287,47 @@ class VertexTransformer(nn.Module):
                 rot = rot[:,None,:]
                 trans = trans[:,None,:]
             x = torch.cat((pose,shape,rot,trans),dim=1)
-            # import ipdb; ipdb.set_trace()
             x = self.pre_norm(x)
             if mask is not None:
                 x = self.masking(x, mask)
-            # import ipdb; ipdb.set_trace()
             x = self.pre_conv(x)
             
         else:
             if x.shape[-1] != self.pose_dim:
                 mask = x[:, :, -1] == 0
                 x = x[:, :, :-1]
-            # import ipdb; ipdb.set_trace()
             x = self.pre_emb(x)
             x = self.pre_norm(x)
         
             if mask is not None:
                 x = self.masking(x, mask)
-        # x = torch.cat((self.cls_token.repeat(x.shape[0], 1, 1), x), dim=1)
-       
-            # import ipdb; ipdb.set_trace()
             x = self.pre_conv(x)
         if self.dino and not self.cross_attention:
             x = torch.cat((emb, x), dim=1)
             # x = self.pre_conv(x)  # 6890+4096 -> 2000
             
-        
-        # import ipdb; ipdb.set_trace()
+
         x = x+self.positional_emb
         x = self.dropout(x)
         
-        # import ipdb; ipdb.set_trace()
         
         if self.cross_attention:
             x = self.encoder(x,context=emb)
         else:
             x = self.encoder(x)
 
-        
-        # if self.upsample != 1:
-        x = self.upsample_conv(x) # 2000+4096 -> 6890*n
         # import ipdb; ipdb.set_trace()
-       
+        
+        if self.multi_view>1:
+            x = torch.transpose(x, 0, 1)
+            x = self.merge_views(x)
+            
+            x = torch.transpose(x, 0, 1)
+        if self.upsample != 1:
+            x = self.upsample_conv(x) # 2000+4096 -> 6890*n
+
         
         means3D = self.mean3D_head(x)
-        # import ipdb; ipdb.set_trace()
         opacity = self.opacity_head(x).sigmoid()
         shs = self.shs_head(x)
         rotations = self.rotations_head(x).sigmoid()

@@ -27,3 +27,10 @@ test.jpg
 *.pth
 *.a
 *.zip
+*.npy
+*.npz
+*.json
+*.pth
+DearPyGuiDearSandbox
+DearPyGui
+*.pkl
