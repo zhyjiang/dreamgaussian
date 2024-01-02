@@ -22,9 +22,9 @@ dataset:
   # path: [./data/ZJUMOCAP/CoreView_313, ./data/ZJUMOCAP/CoreView_314, ./data/ZJUMOCAP/CoreView_315, ./data/ZJUMOCAP/CoreView_316, ./data/ZJUMOCAP/CoreView_317, ./data/ZJUMOCAP/CoreView_318, ./data/ZJUMOCAP/CoreView_319, ./data/ZJUMOCAP/CoreView_320, ./data/ZJUMOCAP/CoreView_321, ./data/ZJUMOCAP/CoreView_322, ./data/ZJUMOCAP/CoreView_323, ./data/ZJUMOCAP/CoreView_324, ./data/ZJUMOCAP/CoreView_325, ./data/ZJUMOCAP/CoreView_326, ./data/ZJUMOCAP/CoreView_327, ./data/ZJUMOCAP/CoreView_328, ./data/ZJUMOCAP/CoreView_329, ./data/ZJUMOCAP/CoreView_330, ./data/ZJUMOCAP/CoreView_331, ./data/ZJUMOCAP/CoreView_332, ./data/ZJUMOCAP/CoreView_333, ./data/ZJUMOCAP/CoreView_334, ./data/ZJUMOCAP/CoreView_335, ./data/ZJUMOCAP/CoreView_336, ./data/ZJUMOCAP/CoreView_337, ./data/ZJUMOCAP/CoreView_338, ./data/ZJUMOCAP/CoreView_339, ./data/ZJUMOCAP/CoreView_340, ./data/ZJUMOCAP/CoreView_341, ./data/ZJUMOCAP/CoreView_342, ./data/ZJUMOCAP/CoreView_343, ./data/ZJUMOCAP/CoreView_344, ./data/ZJUMOCAP/CoreView_345, ./data/ZJUMOCAP/CoreView_346, ./data/ZJUMOCAP/CoreView_347, ./data/ZJUMOCAP/CoreView_348, ./data/ZJUMOCAP/CoreView_349, ./data/ZJUMOCAP/CoreView_350, ./data/ZJUMOCAP/CoreView_351, ./data/ZJUMOCAP/CoreView_352, ./data/ZJUMOCAP/CoreView_353, ./data/ZJUMOCAP/CoreView_354, ./data/ZJUMOCAP/Core
   # camera_list: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\
   root: ./data/ZJUMOCAP/
-  path: [377, 386, 387,392,394]
+  path: [313]
   # path: [377,386,387,394]
-  test_path: [390,393]
+  test_path: [313]
   camera_list: [1]
   num_workers: 5
   smpl_coord: True
@@ -58,8 +58,8 @@ invert_bg_prob: 0.5
 
 ssim_weight: 0.2
 scale_factor: 0.001
-smpl_reg_sacle: 0.01
-IOU_initial_weight : 0.1
+smpl_reg_scale: 0.01
+IOU_init_weight : 0.1
 IOU_weight: 0.002
 upsample: 4 # 1
 loss:  ssim_l2 # [l1 l2 ssim_l2 ssim_l1] #silou loss needs to be added in the next version
