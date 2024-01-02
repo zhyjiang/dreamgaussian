@@ -66,14 +66,19 @@ class ZJU(Dataset):
             print(f'Loading smpl params from {sub_path}')
             self.annots = np.load(os.path.join(sub_path, 'annots.npy'), allow_pickle=True).item()['cams']
         
-            for cam_id,camera in enumerate(self.camera_list):
+            for cam_id, camera in enumerate(self.camera_list):
                 sub_image_path = self.image_path[cam_id]
                 sub_mask_path = self.mask_path[cam_id]
-                # image_paths = sorted(os.listdir(os.path.join(sub_path, f'Camera ({camera})')))
-                image_paths = sorted(os.listdir(os.path.join(sub_path, f'Camera_B{camera}')))
+                if self.path[i] in (313, 315):
+                    image_folder = os.path.join(sub_path, f'Camera ({camera})')
+                    mask_folder = os.path.join(sub_path, 'mask', f'Camera ({camera})')
+                    image_paths = sorted(os.listdir(image_folder))
+                else:
+                    image_folder = os.path.join(sub_path, f'Camera_B{camera}')
+                    mask_folder = os.path.join(sub_path, 'mask', f'Camera_B{camera}')
+                    image_paths = sorted(os.listdir(image_folder))
                 for image_path in image_paths:
-                    # self.image_path.append(os.path.join(sub_path, f'Camera ({camera})', image_path))
-                    sub_image_path.append(os.path.join(sub_path,f'Camera_B{camera}',image_path,))
+                    sub_image_path.append(os.path.join(image_folder, image_path))
                     mask_path = image_path.replace('jpg', 'png')
                     sub_mask_path.append(os.path.join(sub_path, 'mask', f'Camera_B{camera}', mask_path))
                     # self.mask_path.append(os.path.join(sub_path, 'mask', f'Camera ({camera})', mask_path))
@@ -102,6 +107,8 @@ class ZJU(Dataset):
             # sub_smpl2w = []
             # sub_smpl_params = []
             for fid in tqdm(range(num_frame)):
+                if self.path[i] in (313, 315):
+                    fid = fid + 1
                 self.smpl_params.append(np.load(os.path.join(sub_path, 'new_params', f'{fid}.npy'), allow_pickle=True).item())
                 vertices = np.load(os.path.join(sub_path, 'new_vertices', f'{fid}.npy'), allow_pickle=True)
                 # np.load(os.path.join(sub_path, 'new_vertices', f'{fid}.npy'), allow_pickle=True)

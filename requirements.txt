@@ -10,8 +10,10 @@ opencv-python
 imageio
 imageio-ffmpeg
 omegaconf
+open3d
+kornia
 
-torch
+# torch
 einops
 plyfile
 pygltflib
