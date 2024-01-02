@@ -57,21 +57,13 @@ train_geo: False
 invert_bg_prob: 0.5
 
 ssim_weight: 0.2
-
 scale_factor: 0.001
-
 smpl_reg_sacle: 0.01
-
 IOU_initial_weight : 0.1
-
 IOU_weight: 0.002
-
 upsample: 4 # 1
-
 loss:  ssim_l2 # [l1 l2 ssim_l2 ssim_l1] #silou loss needs to be added in the next version
 reg_loss: l2 # [l1 l2 or None]
-
-
 
 lr: 0.001
 base_lr: 0.0002
