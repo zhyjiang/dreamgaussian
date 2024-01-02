@@ -57,7 +57,6 @@ class ZJU(Dataset):
                 res.append(array[i][j])
         return np.array(res)
     def read_data(self):
-        # import ipdb;ipdb.set_trace()
         
         
         

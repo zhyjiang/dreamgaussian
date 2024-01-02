@@ -142,15 +142,6 @@ class Trainer:
                                                         num_workers=opt.dataset.num_workers)
         
         
-        # self.dataloader = torch.utils.data.DataLoader(self.dataset, 
-        #                                               batch_size=opt.batch_size, 
-        #                                               shuffle=True, 
-        #                                               num_workers=0)
-        
-        # self.testloader = torch.utils.data.DataLoader(self.test_dataset, 
-        #                                               batch_size=opt.batch_size, 
-        #                                               shuffle=False, 
-        #                                               num_workers=opt.dataset.num_workers)
         
         print(f'data loader size: {len(self.dataloader.dataset)} and test data loader size: {len(self.testloader.dataset)}')
         
@@ -424,20 +415,10 @@ class Trainer:
                         image = out["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
                         depth = out['depth'].squeeze() # [H, W]
                         
-                        # loss += self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
-                        # if self.reg_loss is not None and epoch ==0 :
-                            # loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.02
-                        # else:
-                        #     loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.05
-                        # import ipdb;ipdb.set_trace()
-                        # if self.reconstruct_loss is not None:
-                        #     loss = loss+self.reconstruct_loss(image * mask[idx:idx+1, None, :, :], gt_images[idx:idx+1])
                         
-                        # if iter % 100 == 0 and idx == 0:
                         np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
-                        
-                        # import ipdb;ipdb.set_trace()
+                      
                         #     # masked = target_img * mask[0].cpu().numpy()[...,None]
                             
                         depth_img = depth.detach().cpu().numpy()
@@ -458,16 +439,7 @@ class Trainer:
                 self.writer.add_scalar('ssim', np.array(ssim_l).mean(),global_step=ep)
                 
           
-                # print(np.array(psnr_l).mean(), np.array(ssim_l).mean())
-                
-            
-            
-                        
-                # pbar.set_postfix({'Loss': f'{loss.item():.5f}'})
-                # import ipdb;ipdb.set_trace()
-                # pbar.set_postfix({'alpha': f'{self.alpha.item():.3f}'})
-                # optimize step
-                # import ipdb;ipdb.set_trace()
+
                 
 
         
@@ -498,7 +470,6 @@ class Trainer:
             # self.renderer.gaussians.update_learning_rate(self.step)
             pbar = tqdm.tqdm(self.dataloader)
             for iter, data in enumerate(pbar):
-                # import ipdb;ipdb.set_trace()
                 loss = 0
                 self.optimizer.zero_grad()
                 
@@ -508,8 +479,6 @@ class Trainer:
                 if 'smpl_param' in data.keys():
                 
                     smpl_params = data['smpl_param']
-                    # import ipdb;ipdb.set_trace()
-                    
                     pose = smpl_params['poses'].float().to(self.device)
                     shape = smpl_params['shapes'].float().to(self.device)
                     trans = smpl_params['Th'].float().to(self.device)
@@ -523,8 +492,6 @@ class Trainer:
                 
                 gt_images = data['image'].float().to(self.device).view((-1,3,self.H,self.W))
                 
-                # if len(gt_images.shape) > 4:
-                #     gt_images = gt_images.squeeze()
                 
                 mask = data['mask'].float().to(self.device).view((-1,self.H,self.W))
                 if len(mask.shape) != len(gt_images.shape):

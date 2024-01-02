@@ -162,9 +162,7 @@ class VertexTransformer(nn.Module):
         
         if dino:
             if self.cross_attention:
-            
-            
-            
+
                 self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim, hidden_dim)),requires_grad=True)
                 self.upsample_conv = nn.Conv1d(downsample_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
             else:
@@ -175,11 +173,7 @@ class VertexTransformer(nn.Module):
             self.upsample_conv = nn.Conv1d(self.downsample_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
         # self.cls_token = nn.Parameter(torch.randn((hidden_dim)))
         
-        
-        
-        
-            
-            
+    
         self.proj_layer = nn.Linear(hidden_dim, hidden_dim, bias=False)
 
         self.pre_emb = nn.Linear(pose_dim, hidden_dim)
@@ -316,7 +310,6 @@ class VertexTransformer(nn.Module):
         else:
             x = self.encoder(x)
 
-        # import ipdb; ipdb.set_trace()
         
         if self.multi_view>1:
             x = torch.transpose(x, 0, 1)

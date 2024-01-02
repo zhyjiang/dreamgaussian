@@ -30,10 +30,10 @@ dataset:
   # camera_list: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\
   root: ./data/ZJUMOCAP/ 
   # path: [313]
-  path: [377, 386, 387,392,394]
-  test_path: [313]
+  path: [377, 386, 387,394]
+  test_path: [390,393]
   camera_list: [1]
-  num_workers: 0
+  num_workers: 8
   smpl_coord: True
   sample_rate: 2
   eval_sample_rate: 80
@@ -65,11 +65,11 @@ lambda_sd: 1
 mvdream: False
 lambda_zero123: 0
 # training batch size per iter
-batch_size: 2
+batch_size: 1
 # training iterations for stage 1
 iters: 1000
 
-multi_view: False
+multi_view: 1
 # whether to linearly anneal timestep
 anneal_timestep: True
 # training iterations for stage 2
