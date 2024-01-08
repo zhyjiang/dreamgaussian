@@ -35,10 +35,10 @@ class ZJU(Dataset):
         for i in range(len(self.camera_list)):
             self.camera_params.append(
         {
-            'Ks': None,
-            'RTs': None,
-            'Ths': None,
-            'Poses': None,
+            'Ks': [],
+            'RTs': [],
+            'Ths': [],
+            'Poses': [],
         })
         self.Ks = []
         self.RTs = []
@@ -58,13 +58,13 @@ class ZJU(Dataset):
         return np.array(res)
     def read_data(self):
         
-        
+        self.seqid = []
         
         for i in range(len(self.path)):
             sub_path= os.path.join(self.root,'CoreView_'+str(self.path[i]))
             print(f'Loading smpl params from {sub_path}')
             self.annots = np.load(os.path.join(sub_path, 'annots.npy'), allow_pickle=True).item()['cams']
-        
+
             for cam_id, camera in enumerate(self.camera_list):
                 sub_image_path = self.image_path[cam_id]
                 sub_mask_path = self.mask_path[cam_id]
@@ -78,20 +78,22 @@ class ZJU(Dataset):
                     image_paths = sorted(os.listdir(image_folder))
                 for image_path in image_paths:
                     sub_image_path.append(os.path.join(image_folder, image_path))
+                    self.seqid.append(i)
                     mask_path = image_path.replace('jpg', 'png')
                     sub_mask_path.append(os.path.join(sub_path, 'mask', f'Camera_B{camera}', mask_path))
                     # self.mask_path.append(os.path.join(sub_path, 'mask', f'Camera ({camera})', mask_path))
                 # import ipdb;ipdb.set_trace()
-                if self.camera_params[cam_id]['Ks'] is None:
-                    self.camera_params[cam_id]['Ks'] = np.array(self.annots['K'][camera - 1])
-                # self.camera_params[cam_id]['Ks'].append(np.array(self.annots['K'][camera - 1])) 
+                # if self.camera_params[cam_id]['Ks'] is None:
+                    # self.camera_params[cam_id]['Ks'] = np.array(self.annots['K'][camera - 1])
+                self.camera_params[cam_id]['Ks'].append(np.array(self.annots['K'][camera - 1]))
                 
                 
-                    RT = np.concatenate([self.annots['R'][camera - 1], 
-                                        self.annots['T'][camera - 1]],
-                                        axis=-1)
-                    RT[:, -1] *= 1e-3
-                    self.camera_params[cam_id]['RTs']=RT
+                RT = np.concatenate([self.annots['R'][camera - 1], 
+                                    self.annots['T'][camera - 1]],
+                                    axis=-1)
+                RT[:, -1] *= 1e-3
+                    # self.camera_params[cam_id]['RTs']=RT
+                self.camera_params[cam_id]['RTs'].append(RT) 
                 
                 
         
@@ -137,6 +139,7 @@ class ZJU(Dataset):
         self.image_path = np.array(self.image_path)
         # import ipdb;ipdb.set_trace()
         self.mask_path = np.array(self.mask_path)
+        # import ipdb;ipdb.set_trace()
         self.camera_params = np.array(self.camera_params)
         
         
@@ -193,7 +196,7 @@ class ZJU(Dataset):
         
         
         
-        
+        # import ipdb;ipdb.set_trace()
         for i in range(len(self.camera_list)):
             
             if self.multi_view > 1:
@@ -204,17 +207,18 @@ class ZJU(Dataset):
                     temp_v -= pelvis
                     # import ipdb;ipdb.set_trace()
                     # w2c[i] = np.eye(4)
-                    w2c[i][:3,:] = self.camera_params[i]['RTs']
+                    w2c[i][:3,:] = self.camera_params[i]['RTs'][self.seqid[index]]
                     w2c[i][:, 3:] += pelvis.T
             else:
             
-                temp_v = (vertices @ self.camera_params[i]['RTs'].T)
-            # proj = (self.camera_params[i]['Ks'][index]  @ temp_v.T).T
-            # proj[:,:2] /= proj[:,2:]
-            
-            # np.save('proj.npy',proj)
-            # np.save('img.npy',cv2.imread(self.image_path[i][index]).astype(np.float32).transpose(2, 0, 1) / 255)
-            
+                temp_v = (vertices @ self.camera_params[i]['RTs'][self.seqid[index]].T)
+                proj = (self.camera_params[i]['Ks'][self.seqid[index]]  @ temp_v.T).T
+                proj[:,:2] /= proj[:,2:]
+                
+                np.save('proj.npy',proj)
+                # import ipdb;ipdb.set_trace()
+                np.save('img.npy',cv2.imread(self.image_path[i][index]).astype(np.float32) / 255)
+                # import ipdb;ipdb.set_trace()    
                 if self.smpl_coord:
                     pelvis = self.smpl.h36m_joints_extract(temp_v[None, ...])[:, 14].numpy()
                     temp_v -= pelvis
@@ -230,9 +234,9 @@ class ZJU(Dataset):
             # bbox = self.get_bbox(mask_image,700,700)
             
             mask_list.append(mask_image)
-            K.append(self.camera_params[i]['Ks'])
-            fovx.append(2 * np.arctan2(1024, 2 * self.camera_params[i]['Ks'][0, 0]))
-            fovy.append(2 * np.arctan2(1024, 2 * self.camera_params[i]['Ks'][1, 1]))
+            K.append(self.camera_params[i]['Ks'][self.seqid[index]])
+            fovx.append(2 * np.arctan2(1024, 2 * self.camera_params[i]['Ks'][self.seqid[index]][0, 0]))
+            fovy.append(2 * np.arctan2(1024, 2 * self.camera_params[i]['Ks'][self.seqid[index]][1, 1]))
             
         # import ipdb;ipdb.set_trace()     
         return {
