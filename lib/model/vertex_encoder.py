@@ -148,11 +148,12 @@ class Transformer(nn.Module):
 
 class VertexTransformer(nn.Module):
     def __init__(self, hidden_dim=64, num_joints=6890, num_layers=2, pose_dim=3, nhead=4, dropout=0.1,
-                 dim_head=64, mlp_dim=64, has_bbox=False,upsample=1,downsample_dim = 1024,dino=False,img_dim=4096,param_input=False,cross_attention=False,pose_num=24,multi_view=1,device='cuda'):
+                 dim_head=64, mlp_dim=64, camera_param=False,has_bbox=False,upsample=1,downsample_dim = 1024,dino=False,img_dim=4096,param_input=False,cross_attention=False,pose_num=24,multi_view=1,device='cuda'):
         super().__init__()
         
         self.hidden_dim = hidden_dim
         self.num_joints = num_joints
+        self.camera_param = camera_param
         self.pose_dim = pose_dim
         self.device = device
         self.downsample_dim = downsample_dim
@@ -194,9 +195,9 @@ class VertexTransformer(nn.Module):
         self.dino = dino
         if self.dino:
             
-            self.dino_encoder = torch.hub.load('facebookresearch/dino:main', self.dino.path).patch_embed.to(self.device)
+            self.dino_encoder = torch.hub.load('facebookresearch/dino:main', self.dino.path).to(self.device)
             
-        
+            # import ipdb;ipdb.set_trace()
         self.encoder = Transformer(hidden_dim, num_layers, nhead, dim_head, mlp_dim, cross=self.cross_attention,dropout=dropout)
         
         self.dropout = nn.Dropout(dropout)
@@ -257,11 +258,22 @@ class VertexTransformer(nn.Module):
         if self.dino:
             with torch.no_grad():
                 self.dino_encoder.eval()
+            # import ipdb;ipdb.set_trace()
                 img_emb = self.dino_encoder(img) # B*384
+            
+            # import ipdb;ipdb.set_trace()
               
             assert cam is not None
             cam_emb = self.cam_proj(cam.reshape(cam.shape[0],-1))[:,None,:]
-            emb = self.img_down(img_emb+ cam_emb) 
+            
+            if self.camera_param:
+                emb = self.img_down(img_emb+ cam_emb)
+            else:
+                emb = self.img_down(img_emb.unsqueeze(0))
+
+            # emb = self.img_down(img_emb)
+            # import ipdb;ipdb.set_trace()
+            # emb = self.img_down(img_emb+ cam_emb) 
             # emb = self.downsamnple_conv(emb)
             # emb = self.img_downconv(emb)
            
