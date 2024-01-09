@@ -112,7 +112,7 @@ class Transformer(nn.Module):
             if self.cross:
                 self.layers.append(nn.ModuleList([
                 PreNorm(dim, Attention(dim, heads = heads, dim_head = dim_head, dropout = dropout)),
-                PreNorm(dim, FeedForward(dim, mlp_dim, dropout = dropout)),
+                # PreNorm(dim, FeedForward(dim, mlp_dim, dropout = dropout)),
                 
                 PreNorm(dim, CrossAttention(dim, heads = heads, dim_head = dim_head, dropout = dropout)),
                 PreNorm(dim, FeedForward(dim, mlp_dim, dropout = dropout))
@@ -133,12 +133,12 @@ class Transformer(nn.Module):
                 x = attn(x) + x
                 x = ff(x) + x
         else:
-             for attn, ff , attn2, ff2 in self.layers:
+             for attn,  attn2, ff in self.layers:
                     x = attn(x) + x
-                    x = ff(x) + x
+                    # x = ff(x) + x
  
                     x = attn2(x,k=context,v=context) + x
-                    x = ff2(x) + x
+                    x = ff(x) + x
             
             # if context is not None:
                 
@@ -148,7 +148,7 @@ class Transformer(nn.Module):
 
 class VertexTransformer(nn.Module):
     def __init__(self, hidden_dim=64, num_joints=6890, num_layers=2, pose_dim=3, nhead=4, dropout=0.1,
-                 dim_head=64, mlp_dim=64, camera_param=False,has_bbox=False,upsample=1,downsample_dim = 1024,dino=False,img_dim=4096,param_input=False,cross_attention=False,pose_num=24,multi_view=1,device='cuda'):
+                 dim_head=64, mlp_dim=64, camera_param=True,has_bbox=False,upsample=1,downsample_dim = 1024,dino=False,dino_update=False,img_dim=4096,param_input=False,cross_attention=False,pose_num=24,multi_view=1,device='cuda'):
         super().__init__()
         
         self.hidden_dim = hidden_dim
@@ -160,6 +160,7 @@ class VertexTransformer(nn.Module):
         self.param_input = param_input
         self.cross_attention=cross_attention
         self.multi_view = multi_view
+        self.dino_update = dino_update and  dino
         
         if dino:
             if self.cross_attention:
@@ -167,8 +168,8 @@ class VertexTransformer(nn.Module):
                 self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim, hidden_dim)),requires_grad=True)
                 self.upsample_conv = nn.Conv1d(downsample_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
             else:
-                self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim+img_dim, hidden_dim)),requires_grad=True)
-                self.upsample_conv = nn.Conv1d(downsample_dim+img_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
+                self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim+1, hidden_dim)),requires_grad=True)
+                self.upsample_conv = nn.Conv1d(downsample_dim+1, num_joints*upsample, kernel_size=1) if upsample!=1 else None
         else:
             self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim, hidden_dim)),requires_grad=True)
             self.upsample_conv = nn.Conv1d(self.downsample_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
@@ -256,10 +257,16 @@ class VertexTransformer(nn.Module):
         mask = None
        
         if self.dino:
-            with torch.no_grad():
-                self.dino_encoder.eval()
-            # import ipdb;ipdb.set_trace()
-                img_emb = self.dino_encoder(img) # B*384
+            if not self.dino_update:
+                with torch.no_grad():
+                    self.dino_encoder.eval()
+                # import ipdb;ipdb.set_trace()
+                    img_emb = self.dino_encoder(img) # B*384
+                    
+                    
+            else:
+                self.dino_encoder.train()
+                img_emb = self.dino_encoder(img)
             
             # import ipdb;ipdb.set_trace()
               
@@ -307,11 +314,12 @@ class VertexTransformer(nn.Module):
         
             if mask is not None:
                 x = self.masking(x, mask)
+            # import ipdb;ipdb.set_trace()
             x = self.pre_conv(x)
         if self.dino and not self.cross_attention:
             x = torch.cat((emb, x), dim=1)
             # x = self.pre_conv(x)  # 6890+4096 -> 2000
-            
+        # import ipdb;ipdb.set_trace()    
 
         x = x+self.positional_emb
         x = self.dropout(x)

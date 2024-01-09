@@ -78,7 +78,7 @@ class Trainer:
         # self.enable_zero123 = False
         img_emb_dim = self.data_config.img_emb_dim
         
-        self.encoder = VertexTransformer(upsample=self.opt.upsample,dino=self.opt.dino,img_dim=img_emb_dim,param_input=self.opt.param_input,cross_attention=self.opt.cross_attn,pose_num=self.data_config.pose_num,multi_view=self.opt.multi_view,device=self.device).to(self.device)
+        self.encoder = VertexTransformer(upsample=self.opt.upsample,dino=self.opt.dino,img_dim=img_emb_dim,param_input=self.opt.param_input,cross_attention=self.opt.cross_attn,pose_num=self.data_config.pose_num,multi_view=self.opt.multi_view,camera_param=self.opt.camera_param,dino_update = self.opt.dino_update,device=self.device).to(self.device)
 
         # renderer
         self.renderer = Renderer(sh_degree=self.opt.sh_degree)
@@ -470,6 +470,8 @@ class Trainer:
             # self.renderer.gaussians.update_learning_rate(self.step)
             pbar = tqdm.tqdm(self.dataloader)
             for iter, data in enumerate(pbar):
+                
+                # import ipdb;ipdb.set_trace()
                 loss = 0
                 self.optimizer.zero_grad()
                 
@@ -644,6 +646,55 @@ class Trainer:
                         cv2.imwrite(os.path.join(self.opt.vis_path,f'{iter}.jpg'), np.concatenate((target_img, np_img), axis=1)*255.0)
                         plt.imsave(os.path.join(self.opt.vis_depth_path,f'{iter}.jpg'), depth_img)
                         
+                        
+                        
+                    # if iter % 400 ==0:
+                        
+                    #     cam = MiniCam(
+                    #         data['w2c'][idx],
+                    #         self.W,
+                    #         self.H,
+                    #          self.sec_camera['fovy'][idx],
+                    #         self.sec_camera['fovx'][idx],
+                    #         self.near,
+                    #         self.far,
+                    #     )
+                            
+                            
+                            
+                    #     bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
+                    
+                    
+                    #     if self.opt.multi_view > 1:
+                            
+                    #         out = self.renderer.render(cam,
+                    #                                 vertices[idx]+means3D[0],
+                    #                                 opacity[0],
+                    #                                 scales[0],
+                    #                                 shs[0][:, None, :],
+                    #                                 rotations[0],
+                    #                                 bg_color=bg_color)
+                        
+                    #     else:    
+                    #         out = self.renderer.render(cam,
+                    #                                 vertices[idx]+means3D[idx],
+                    #                                 opacity[idx],
+                    #                                 scales[idx],
+                    #                                 shs[idx][:, None, :],
+                    #                                 rotations[idx],
+                    #                                 bg_color=bg_color)
+                    
+                    #     image = out["image"] # [1, 3, H, W] in [0, 1]
+                    #     depth = out['depth'].squeeze() # [H, W]
+                        
+                        
+                    #     image_mask = image.clone()
+                    #     image_mask[image_mask>0] = 1
+                        
+                        
+                    #     np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
+                    #     # target_img = self_sec[idx].cpu().numpy().transpose(1, 2, 0)
+                            
                         # plt.scatter(proj[:,0],proj[:,1],c='r')
                         # cv2.imwrite(f'./vis_temp/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
                         # plt.savefig(os.path.join(self.opt.vis_path,f'test_{iter}.jpg'), proj)

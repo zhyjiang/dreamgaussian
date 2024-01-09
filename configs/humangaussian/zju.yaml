@@ -2,7 +2,7 @@
 outdir: logs
 mesh_format: obj
 save_path: checkpoints
-save_name: test_humman_cross_test_no_camera
+save_name: test_humman_cross_test_no_camera_2
 save_interval: 25
 eval_interval: 1
 
@@ -16,13 +16,17 @@ dino:
   name: ViT-S
   path: dino_vits16
 
-vis_path: vis_res_test_no_camera
+vis_path: vis_res_test_no_camera_2
 
-vis_depth_path: vis_depth_test_no_camera
+camera_param : False
 
-vis_eval: vis_eval_res_test_no_camera
+dino_update : False
 
-vis_eval_depth_path: vis_eval_depth_test_no_camera
+vis_depth_path: vis_depth_test_no_camera_2
+
+vis_eval: vis_eval_res_test_no_camera_2
+
+vis_eval_depth_path: vis_eval_depth_test_no_camera_2
 dataset_type:  ZJU
 dataset:
   name: ZJU  #HuMMan
