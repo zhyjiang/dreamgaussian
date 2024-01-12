@@ -84,8 +84,8 @@ class Trainer:
         else:
             self.data_config = self.opt.dataset2
             
-        # self.lpips = LPIPS()
-        self.lpips = None
+        self.lpips = LPIPS()
+        # self.lpips = None
         self.W = self.data_config.W
         self.H = self.data_config.H
         self.near = opt.near

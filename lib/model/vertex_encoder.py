@@ -317,7 +317,10 @@ class VertexTransformer(nn.Module):
                     # import ipdb;ipdb.set_trace()
                 img_emb = img_emb['last_hidden_state'][...,1:,:]
                 # img_emb = img_emb['last_hidden_state'][...,1:,:]
-            else:    
+            elif self.dino_update:
+                self.dino_encoder.train()
+                img_emb = self.dino_encoder(img)
+            else:
                 self.dino_encoder.eval()
                 img_emb = self.dino_encoder(img)
                     
