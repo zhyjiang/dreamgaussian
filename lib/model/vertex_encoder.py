@@ -321,10 +321,11 @@ class VertexTransformer(nn.Module):
                 self.dino_encoder.train()
                 img_emb = self.dino_encoder(img)
             else:
-                self.dino_encoder.eval()
-                img_emb = self.dino_encoder(img)
+                with torch.no_grad():
+                    self.dino_encoder.eval()
+                    img_emb = self.dino_encoder(img)
                     
-                    # import ipdb;ipdb.set_trace()
+            # import ipdb;ipdb.set_trace()
                     
                     # img_emb  = self.img_downconv(img_emb)
                     
