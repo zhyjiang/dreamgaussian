@@ -110,7 +110,7 @@ reg_loss: l2 # [l1 l2 or None]
 
 
 
-lr: 0.001
+lr: 0.0005
 base_lr: 0.0001 #0.0001
 warmup: 10
 
