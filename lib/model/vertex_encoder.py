@@ -2,6 +2,10 @@ import torch.nn as nn
 import torch
 import numpy as np
 
+from transformers import ViTImageProcessor, ViTModel, ViTConfig
+from PIL import Image
+import requests
+
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from .utils import get_1d_sincos_pos_embed
@@ -50,6 +54,7 @@ class Attention(nn.Module):
 
     def forward(self, x):
         qkv = self.to_qkv(x).chunk(3, dim = -1)
+        # import ipdb;ipdb.set_trace()
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.heads), qkv)
 
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
@@ -92,6 +97,7 @@ class CrossAttention(nn.Module):
         q = self.query_qkv(q)
         k = self.key_qkv(k)
         v = self.value_qkv(v)
+        # import ipdb;ipdb.set_trace()
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.heads), (q,k,v))
 
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
@@ -128,12 +134,16 @@ class Transformer(nn.Module):
                 
     def forward(self, x, context=None):
         
+        if context is not None  and len(context.shape) > 3:
+            context = context.squeeze(0)
+        
         if not self.cross:
             for attn, ff in self.layers:
                 x = attn(x) + x
                 x = ff(x) + x
         else:
              for attn,  attn2, ff in self.layers:
+                    # import ipdb;ipdb.set_trace()
                     x = attn(x) + x
                     # x = ff(x) + x
  
@@ -147,9 +157,11 @@ class Transformer(nn.Module):
         return x
 
 class VertexTransformer(nn.Module):
-    def __init__(self, hidden_dim=64, num_joints=6890, num_layers=2, pose_dim=3, nhead=4, dropout=0.1,
+    def __init__(self, opt,hidden_dim=64, num_joints=6890, num_layers=2, pose_dim=3, nhead=4, dropout=0.1,
                  dim_head=64, mlp_dim=64, camera_param=True,has_bbox=False,upsample=1,downsample_dim = 1024,dino=False,dino_update=False,img_dim=4096,param_input=False,cross_attention=False,pose_num=24,multi_view=1,device='cuda'):
         super().__init__()
+        
+        self.opt = opt
         
         self.hidden_dim = hidden_dim
         self.num_joints = num_joints
@@ -168,8 +180,8 @@ class VertexTransformer(nn.Module):
                 self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim, hidden_dim)),requires_grad=True)
                 self.upsample_conv = nn.Conv1d(downsample_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
             else:
-                self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim+1, hidden_dim)),requires_grad=True)
-                self.upsample_conv = nn.Conv1d(downsample_dim+1, num_joints*upsample, kernel_size=1) if upsample!=1 else None
+                self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim+img_dim, hidden_dim)),requires_grad=True)
+                self.upsample_conv = nn.Conv1d(downsample_dim+img_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
         else:
             self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim, hidden_dim)),requires_grad=True)
             self.upsample_conv = nn.Conv1d(self.downsample_dim, num_joints*upsample, kernel_size=1) if upsample!=1 else None
@@ -196,7 +208,30 @@ class VertexTransformer(nn.Module):
         self.dino = dino
         if self.dino:
             
-            self.dino_encoder = torch.hub.load('facebookresearch/dino:main', self.dino.path).to(self.device)
+            if self.opt.full_token and self.opt.reshape: 
+                self.processor = ViTImageProcessor.from_pretrained('facebook/dino-vits16')
+                # self.processor.size['height'] = 1080
+                # self.processor.size['width'] = 1920
+                
+                config=ViTConfig.from_pretrained('facebook/dino-vits16')
+                # config.image_size = (1080, 1920)
+                self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16',config=config,ignore_mismatched_sizes=True).to(self.device)
+            elif self.opt.full_token:
+               
+                self.processor = ViTImageProcessor.from_pretrained('facebook/dino-vits16')
+                self.processor.size['height'] = 1080
+                self.processor.size['width'] = 1920
+                
+                config=ViTConfig.from_pretrained('facebook/dino-vits16')
+                config.image_size = (1080, 1920)
+                self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16',config=config,ignore_mismatched_sizes=True).to(self.device)
+            else:
+               
+            # import ipdb;ipdb.set_trace()
+            # self.dino_encoder.config.image_size = (1080, 1920)
+
+           
+                self.dino_encoder = torch.hub.load('facebookresearch/dino:main', self.dino.path).to(self.device)
             
             # import ipdb;ipdb.set_trace()
         self.encoder = Transformer(hidden_dim, num_layers, nhead, dim_head, mlp_dim, cross=self.cross_attention,dropout=dropout)
@@ -213,7 +248,7 @@ class VertexTransformer(nn.Module):
         self.upsample = upsample
         self.cam_proj = nn.Linear(4*4, 384)
         self.img_down = nn.Linear(384,hidden_dim)
-        # self.img_downconv = nn.Conv1d(4096,2000,kernel_size=1)
+        self.img_downconv = nn.Conv1d(4096,2048,kernel_size=1)
         self.initialize_weights()
         
         self.mean3D_head = self._make_head(hidden_dim, 3)
@@ -257,26 +292,74 @@ class VertexTransformer(nn.Module):
         mask = None
        
         if self.dino:
-            if not self.dino_update:
+            # import ipdb;ipdb.set_trace()
+            if not self.dino_update and self.opt.full_token:
+                # import ipdb;ipdb.set_trace()
+                # self.dino_encoder.train()
                 with torch.no_grad():
                     self.dino_encoder.eval()
                 # import ipdb;ipdb.set_trace()
-                    img_emb = self.dino_encoder(img) # B*384
+                    inputs = self.processor(images=img, return_tensors="pt").to(self.device)
+                # # # import ipdb;ipdb.set_trace()
+                    img_emb = self.dino_encoder(**inputs)
+                # # # import ipdb;ipdb.set_trace()
+                    # import ipdb;ipdb.set_trace()
+                    img_emb = img_emb['last_hidden_state'][...,1:,:]
                     
-                    
-            else:
+            elif self.opt.full_token:
+                
                 self.dino_encoder.train()
+                
+                inputs = self.processor(images=img, return_tensors="pt").to(self.device)
+                # # # import ipdb;ipdb.set_trace()
+                img_emb = self.dino_encoder(**inputs)
+                # # # import ipdb;ipdb.set_trace()
+                    # import ipdb;ipdb.set_trace()
+                img_emb = img_emb['last_hidden_state'][...,1:,:]
+                # img_emb = img_emb['last_hidden_state'][...,1:,:]
+            else:    
+                self.dino_encoder.eval()
                 img_emb = self.dino_encoder(img)
+                    
+                    # import ipdb;ipdb.set_trace()
+                    
+                    # img_emb  = self.img_downconv(img_emb)
+                    
+                
+                # new_batch = {"pixel_values": img.to(img.device)} # Apply torchvision.transforms to read PIL image and convert to Tensor
+                # with torch.no_grad():
+                # import ipdb;ipdb.set_trace()
+                # img_emb = self.dino_encoder(**inputs).last_hidden_state
+                    
+                
+                # inputs = self.processor(images=img, return_tensors="pt")
+                # import ipdb;ipdb.set_trace()
+                # outputs = self.dino_encoder(**inputs)
+                # img_emb = outputs.last_hidden_state
+                
+                 # B*384
+                # import ipdb;ipdb.set_trace()
+                
+                
+                    # import ipdb;ipdb.set_trace()
+                    
+                    
+            # else:
+            #     self.dino_encoder.train()
+            #     img_emb = self.dino_encoder(img)
             
             # import ipdb;ipdb.set_trace()
-              
+            # import ipdb;ipdb.set_trace()
+
             assert cam is not None
             cam_emb = self.cam_proj(cam.reshape(cam.shape[0],-1))[:,None,:]
             
             if self.camera_param:
                 emb = self.img_down(img_emb+ cam_emb)
             else:
-                emb = self.img_down(img_emb.unsqueeze(0))
+                # emb = self.img_down(img_emb.unsqueeze(0))
+                # import ipdb;ipdb.set_trace()
+                emb = self.img_down(img_emb[0].unsqueeze(0).unsqueeze(0))
 
             # emb = self.img_down(img_emb)
             # import ipdb;ipdb.set_trace()
@@ -320,7 +403,7 @@ class VertexTransformer(nn.Module):
             x = torch.cat((emb, x), dim=1)
             # x = self.pre_conv(x)  # 6890+4096 -> 2000
         # import ipdb;ipdb.set_trace()    
-
+        # import ipdb;ipdb.set_trace()
         x = x+self.positional_emb
         x = self.dropout(x)
         
@@ -332,6 +415,11 @@ class VertexTransformer(nn.Module):
 
         
         if self.multi_view>1:
+            
+            # import ipdb;ipdb.set_trace()
+            
+            # torch.nn.functional.avg_pool1d(x, kernel_size=self.multi_view, channels=1)
+            import ipdb;ipdb.set_trace()
             x = torch.transpose(x, 0, 1)
             x = self.merge_views(x)
             

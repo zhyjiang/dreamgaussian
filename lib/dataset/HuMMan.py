@@ -157,7 +157,7 @@ def sample_ray_THuman_batch(img, msk, K, R, T, bounds, image_scaling, white_back
 
 
 class HuMManDatasetBatch(Dataset):
-    def __init__(self, data_root=None, split='train', multi_person=True, num_instance=200, poses_start=0, poses_interval=6, poses_num=4, image_scaling=1/3, white_back=False, sample_obs_view=True, fix_obs_view=False, resolution=None):
+    def __init__(self, data_root=None, split='train', multi_person=True, num_instance=317, poses_start=0, poses_interval=6, poses_num=6, image_scaling=1/3, white_back=False, sample_obs_view=True, fix_obs_view=False, resolution=None):
         super(HuMManDatasetBatch, self).__init__()
         
         self.data_root = data_root

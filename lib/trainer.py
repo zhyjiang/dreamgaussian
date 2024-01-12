@@ -23,6 +23,9 @@ from lib.dataset.ZJU import ZJU
 from lib.dataset.HuMMan import HuMManDatasetBatch
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
+from .network import get_network, LinLayers
+from .utils import get_state_dict
+# from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 
 
@@ -41,7 +44,35 @@ class IoULoss(torch.nn.Module):
 
         return loss
 
+class LPIPS(torch.nn.Module):
+    r"""Creates a criterion that measures
+    Learned Perceptual Image Patch Similarity (LPIPS).
 
+    Arguments:
+        net_type (str): the network type to compare the features: 
+                        'alex' | 'squeeze' | 'vgg'. Default: 'vgg'.
+        version (str): the version of LPIPS. Default: 0.1.
+    """
+    def __init__(self, net_type: str = 'vgg', version: str = '0.1'):
+
+        assert version in ['0.1'], 'v0.1 is only supported now'
+
+        super(LPIPS, self).__init__()
+
+        # pretrained network
+        self.net = get_network(net_type)
+
+        # linear layers
+        self.lin = LinLayers(self.net.n_channels_list)
+        self.lin.load_state_dict(get_state_dict(net_type, version))
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor):
+        feat_x, feat_y = self.net(x), self.net(y)
+
+        diff = [(fx - fy) ** 2 for fx, fy in zip(feat_x, feat_y)]
+        res = [l(d).mean((2, 3), True) for d, l in zip(diff, self.lin)]
+
+        return torch.sum(torch.cat(res, 0), 0, True)
 
 class Trainer:
     def __init__(self, opt):
@@ -53,7 +84,8 @@ class Trainer:
         else:
             self.data_config = self.opt.dataset2
             
-            
+        # self.lpips = LPIPS()
+        self.lpips = None
         self.W = self.data_config.W
         self.H = self.data_config.H
         self.near = opt.near
@@ -78,7 +110,7 @@ class Trainer:
         # self.enable_zero123 = False
         img_emb_dim = self.data_config.img_emb_dim
         
-        self.encoder = VertexTransformer(upsample=self.opt.upsample,dino=self.opt.dino,img_dim=img_emb_dim,param_input=self.opt.param_input,cross_attention=self.opt.cross_attn,pose_num=self.data_config.pose_num,multi_view=self.opt.multi_view,camera_param=self.opt.camera_param,dino_update = self.opt.dino_update,device=self.device).to(self.device)
+        self.encoder = VertexTransformer(opt=self.opt,upsample=self.opt.upsample,dino=self.opt.dino,img_dim=img_emb_dim,param_input=self.opt.param_input,cross_attention=self.opt.cross_attn,pose_num=self.data_config.pose_num,multi_view=self.opt.multi_view,camera_param=self.opt.camera_param,dino_update = self.opt.dino_update,device=self.device).to(self.device)
 
         # renderer
         self.renderer = Renderer(sh_degree=self.opt.sh_degree)
@@ -125,6 +157,7 @@ class Trainer:
                                                       num_workers=opt.dataset.num_workers)
             
         elif self.opt.dataset_type == 'HuMMan':
+            # import ipdb;ipdb.set_trace()
             
         
         
@@ -321,6 +354,8 @@ class Trainer:
                 psnr_l = []
                 ssim_l = []
                 psnr_l_normed = []
+                np_imgs = [] 
+                gt_imgs = []
                 
                 pbar = tqdm.tqdm(self.testloader)
                 for iter, data in enumerate(pbar):
@@ -416,8 +451,19 @@ class Trainer:
                         depth = out['depth'].squeeze() # [H, W]
                         
                         
-                        np_img = image[0].detach().cpu().numpy().transpose(1, 2, 0)
-                        target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
+                        np_img = image[0].detach().cpu().numpy()
+                        np_imgs.append(np_img)
+                        
+                        np_img = np_img.transpose(1, 2, 0)
+                        
+                        
+                        target_img = gt_images[idx].cpu().numpy()
+                        
+                        gt_imgs.append(target_img)
+                        target_img = target_img.transpose(1, 2, 0)
+                        
+                        
+                        
                       
                         #     # masked = target_img * mask[0].cpu().numpy()[...,None]
                             
@@ -432,11 +478,24 @@ class Trainer:
                         psnr_l.append(self.psnr_metric(np_img, target_img))
                         
                         psnr_l_normed.append(self.psnr_metric(pred_img_norm, gt_img_norm))
-                        
+  
                         ssim_l.append(skimage.metrics.structural_similarity( gt_img_norm,pred_img_norm, multichannel=True,channel_axis=-1,data_range=1.0))   
-                self.writer.add_scalar('psnr', np.array(psnr_l).mean(),global_step=ep)        
-                self.writer.add_scalar('psnr_normed', np.array(psnr_l_normed).mean(),global_step=ep)
-                self.writer.add_scalar('ssim', np.array(ssim_l).mean(),global_step=ep)
+                
+                
+                
+                if self.lpips is not None:
+                        
+                    self.lpips.eval()
+    
+                            
+                        
+                            
+                    lpips_res = self.lpips(torch.tensor(np.array(np_imgs)), torch.tensor(np.array(gt_imgs)))
+                self.writer.add_scalar('psnr_eval', np.array(psnr_l).mean(),global_step=ep)        
+                self.writer.add_scalar('psnr_normed_eval', np.array(psnr_l_normed).mean(),global_step=ep)
+                self.writer.add_scalar('ssim_eval', np.array(ssim_l).mean(),global_step=ep)
+                if self.lpips is not None:
+                    self.writer.add_scalar('lpips_eval',lpips_res.item(),global_step=ep)
                 
           
 
@@ -458,6 +517,7 @@ class Trainer:
             
             os.makedirs(self.opt.vis_path,exist_ok=True)
             os.makedirs(self.opt.vis_depth_path,exist_ok=True)
+            os.makedirs(self.opt.vis_second_view,exist_ok=True)
             print(self.optimizer.param_groups[0]['lr'])
             self.encoder.train()
 
@@ -504,12 +564,15 @@ class Trainer:
                 data['w2c'] = data['w2c'].view((-1,4,4))
                 data['fovy'] = data['fovy'].view((-1))
                 data['fovx'] = data['fovx'].view((-1))
+                
+                # import ipdb;ipdb.set_trace()
 
                 cam_list= [ ]
                 full_proj_cam_list = [ ]
                 world_cam_list = []
 
-                for i in range(len(data['w2c'])):  
+                # for i in range(len(data['w2c'])):  
+                for i in range(1):
                    
                     cam = MiniCam(
                         data['w2c'][i],
@@ -555,8 +618,8 @@ class Trainer:
                 if self.encoder.upsample != 1:
                     vertices = vertices.repeat( 1,self.encoder.upsample, 1)
                 scales = scales * self.opt.scale_factor
-                for idx in range(len(data['w2c'])):
-                   
+                # for idx in range(len(data['w2c'])):
+                for idx in range(1):   
                     cam = MiniCam(
                         data['w2c'][idx],
                         self.W,
@@ -651,14 +714,15 @@ class Trainer:
                     # if iter % 400 ==0:
                         
                     #     cam = MiniCam(
-                    #         data['w2c'][idx],
+                    #         data['w2c'][-1],
                     #         self.W,
                     #         self.H,
-                    #          self.sec_camera['fovy'][idx],
-                    #         self.sec_camera['fovx'][idx],
+                    #         data['fovy'][-1],
+                    #         data['fovx'][-1],
                     #         self.near,
                     #         self.far,
                     #     )
+                    #     # import ipdb;ipdb.set_trace()
                             
                             
                             
@@ -693,10 +757,13 @@ class Trainer:
                         
                         
                     #     np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
+                    #     target = gt_images[-1].cpu().numpy().transpose(1, 2, 0)
                     #     # target_img = self_sec[idx].cpu().numpy().transpose(1, 2, 0)
                             
-                        # plt.scatter(proj[:,0],proj[:,1],c='r')
-                        # cv2.imwrite(f'./vis_temp/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
+                    #     # plt.scatter(proj[:,0],proj[:,1],c='r')
+                    #     cv2.imwrite(f'{self.opt.vis_second_view}/{iter}.jpg', np.concatenate((target, np_img), axis=1) * 255)
+                        # import ipdb;ipdb.set_trace()
+
                         # plt.savefig(os.path.join(self.opt.vis_path,f'test_{iter}.jpg'), proj)
                         # cv2.imwrite(f'./vis_mask/{iter}.jpg', np.concatenate((target_img, masked), axis=1) * 255)
                         
