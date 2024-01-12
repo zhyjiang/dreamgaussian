@@ -8,6 +8,8 @@ Make sure change save_name and all viuslization path name （vis_path, vis_depth
 
 PLease run these tasks.
 
+remember to change dataset2 root to the local humman path in the config file
+
 1. in the config file set full_token = True dino_update = True
 2. full_token = False dino_update = True
 3. full_token = False dino_update = False
