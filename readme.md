@@ -8,9 +8,10 @@ Make sure change save_name and all viuslization path name （vis_path, vis_depth
 
 PLease run these tasks.
 
-1. in the config file set param_input = True cros_attn = True
-2. param_input = True cros_attn = False
-3. param_input = False cros_attn = True
-4. param_input = False cros_attn = False
-5. param_input = True cros_attn = True set IOU_weight = 0.02
-6. param_input = True cros_attn = True set smpl_reg_scale = 0.1
+1. in the config file set full_token = True dino_update = True
+2. full_token = False dino_update = True
+3. full_token = False dino_update = False
+4. full_token = True reshape = True dino_update = False
+5. param_input = True cros_attn = True smpl_reg_scale = 0.01
+
+
