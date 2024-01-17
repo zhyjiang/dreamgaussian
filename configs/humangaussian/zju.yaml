@@ -2,13 +2,12 @@
 outdir: logs
 mesh_format: obj
 save_path: checkpoints
-save_name: test_humman_cross_test_humman_224
+save_name: temp_ZJU_test
 save_interval: 25
 eval_interval: 1
 
-### Dataset
-canonical: False
-param_input: True
+
+
 
 crop_image: False
 dino:
@@ -16,29 +15,31 @@ dino:
   name: ViT-S
   path: dino_vits16
 
-vis_path: vis_res_test_humman_224
+vis_path: temp_ZJU_test
 
-vis_second_view: vis_res_view_test_humman_224
+vis_ply_path: temp_ZJU_test
 
-camera_param : False
+vis_second_view: temp_second_view_ZJU_test
 
 
 
-vis_depth_path: vis_depth_test_humman_224
 
-vis_eval: vis_eval_res_test_humman_224
 
-vis_eval_depth_path: vis_eval_depth_test_humman_224
-dataset_type:  HuMMan
+vis_depth_path: temp_depth_ZJU_test
+
+vis_eval: temp_vis_eval_ZJU_test
+
+vis_eval_depth_path: temp_depth_eval_ZJU_test
+dataset_type:  ZJU
 dataset:
   name: ZJU  #HuMMan
   # path: [./data/ZJUMOCAP/CoreView_313, ./data/ZJUMOCAP/CoreView_314, ./data/ZJUMOCAP/CoreView_315, ./data/ZJUMOCAP/CoreView_316, ./data/ZJUMOCAP/CoreView_317, ./data/ZJUMOCAP/CoreView_318, ./data/ZJUMOCAP/CoreView_319, ./data/ZJUMOCAP/CoreView_320, ./data/ZJUMOCAP/CoreView_321, ./data/ZJUMOCAP/CoreView_322, ./data/ZJUMOCAP/CoreView_323, ./data/ZJUMOCAP/CoreView_324, ./data/ZJUMOCAP/CoreView_325, ./data/ZJUMOCAP/CoreView_326, ./data/ZJUMOCAP/CoreView_327, ./data/ZJUMOCAP/CoreView_328, ./data/ZJUMOCAP/CoreView_329, ./data/ZJUMOCAP/CoreView_330, ./data/ZJUMOCAP/CoreView_331, ./data/ZJUMOCAP/CoreView_332, ./data/ZJUMOCAP/CoreView_333, ./data/ZJUMOCAP/CoreView_334, ./data/ZJUMOCAP/CoreView_335, ./data/ZJUMOCAP/CoreView_336, ./data/ZJUMOCAP/CoreView_337, ./data/ZJUMOCAP/CoreView_338, ./data/ZJUMOCAP/CoreView_339, ./data/ZJUMOCAP/CoreView_340, ./data/ZJUMOCAP/CoreView_341, ./data/ZJUMOCAP/CoreView_342, ./data/ZJUMOCAP/CoreView_343, ./data/ZJUMOCAP/CoreView_344, ./data/ZJUMOCAP/CoreView_345, ./data/ZJUMOCAP/CoreView_346, ./data/ZJUMOCAP/CoreView_347, ./data/ZJUMOCAP/CoreView_348, ./data/ZJUMOCAP/CoreView_349, ./data/ZJUMOCAP/CoreView_350, ./data/ZJUMOCAP/CoreView_351, ./data/ZJUMOCAP/CoreView_352, ./data/ZJUMOCAP/CoreView_353, ./data/ZJUMOCAP/CoreView_354, ./data/ZJUMOCAP/Core
   # camera_list: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\
   root: ./data/ZJUMOCAP/ 
   # path: [313]
-  path: [377,386,387,394]
+  path: [394]
   test_path: [390,393]
-  camera_list: [1]
+  camera_list: [1,4,7,9]
   num_workers: 0
   smpl_coord: True
   sample_rate: 2
@@ -57,7 +58,7 @@ dataset2:
   multi_person: True
   num_workers: 8
   num_instances: 1
-  img_emb_dim:  8040
+  img_emb_dim:  196 #8040
   H: 1080
   W: 1920
   pose_num: 23
@@ -66,12 +67,16 @@ dataset2:
 
 ### Training
 # guidance loss weights (0 to disable)
+canonical: False
+param_input: True
+camera_param : True
+trans_decoder: True
 cross_attn: True
 lambda_sd: 1
 mvdream: False
 lambda_zero123: 0
-full_token: False
-reshape: False
+full_token: True
+reshape: True
 dino_update : False
 # training batch size per iter
 batch_size: 1
@@ -98,7 +103,7 @@ ssim_weight: 0.2
 
 scale_factor: 0.001 #0.001
 
-smpl_reg_scale:  1.0 # 0.01
+smpl_reg_scale:  0.01 # 0.01
 
 IOU_init_weight : 0.1
 
@@ -110,9 +115,9 @@ reg_loss: l2 # [l1 l2 or None]
 
 
 
-lr: 0.0005
+lr: 0.001 #0.001
 base_lr: 0.0001 #0.0001
-warmup: 10
+warmup: 10 #10
 
 ### GUI
 gui: False

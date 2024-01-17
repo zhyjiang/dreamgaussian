@@ -34,3 +34,5 @@ test.jpg
 DearPyGuiDearSandbox
 DearPyGui
 *.pkl
+*.ply
+*.ipynb

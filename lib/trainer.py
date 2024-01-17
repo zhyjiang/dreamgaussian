@@ -6,7 +6,7 @@ import skimage
 import tqdm
 import numpy as np
 import dearpygui.dearpygui as dpg
-
+from plyfile import PlyData, PlyElement
 import torch
 import torch.nn.functional as F
 
@@ -25,6 +25,9 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 from .network import get_network, LinLayers
 from .utils import get_state_dict
+
+
+# torch.manual_seed(0)
 # from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 
@@ -84,8 +87,8 @@ class Trainer:
         else:
             self.data_config = self.opt.dataset2
             
-        self.lpips = LPIPS()
-        # self.lpips = None
+        # self.lpips = LPIPS()
+        self.lpips = None
         self.W = self.data_config.W
         self.H = self.data_config.H
         self.near = opt.near
@@ -110,7 +113,7 @@ class Trainer:
         # self.enable_zero123 = False
         img_emb_dim = self.data_config.img_emb_dim
         
-        self.encoder = VertexTransformer(opt=self.opt,upsample=self.opt.upsample,dino=self.opt.dino,img_dim=img_emb_dim,param_input=self.opt.param_input,cross_attention=self.opt.cross_attn,pose_num=self.data_config.pose_num,multi_view=self.opt.multi_view,camera_param=self.opt.camera_param,dino_update = self.opt.dino_update,device=self.device).to(self.device)
+        self.encoder = VertexTransformer(opt=self.opt,img_dim=img_emb_dim,pose_num=self.data_config.pose_num,device=self.device, H=self.data_config.H, W = self.data_config.W).to(self.device)
 
         # renderer
         self.renderer = Renderer(sh_degree=self.opt.sh_degree)
@@ -375,7 +378,7 @@ class Trainer:
                     cam_list = []
                     full_proj_cam_list = []
                     
-                    for i in range(len(data['w2c'])):
+                    for i in range(self.opt.multi_view):
                 
                             cam = MiniCam(
                                 data['w2c'][i],
@@ -404,7 +407,7 @@ class Trainer:
                         rot = smpl_params['Rh'].float().to(self.device)   
                     
                     if self.opt.param_input:
-                        means3D, opacity, scales, shs, rotations = self.encoder((pose,shape,rot,trans),img=gt_images,cam = full_proj_cam_list)
+                        means3D, opacity, scales, shs, rotations = self.encoder((pose,shape),img=gt_images,cam = full_proj_cam_list)
                     
                     else:
                         means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=gt_images,cam = cam_list)
@@ -414,7 +417,8 @@ class Trainer:
                     
                     
                     
-                    for idx in range(len(vertices)):
+                    # for idx in range(len(vertices)):
+                    for idx in range(self.opt.multi_view):
                         
                         
                         
@@ -432,7 +436,7 @@ class Trainer:
                         if self.opt.multi_view > 1:
                             
                             out = self.renderer.render(cam,
-                                                    vertices[idx]+means3D[0],
+                                                     vertices[idx]+means3D[0],
                                                     opacity[0],
                                                     scales[0],
                                                     shs[0][:, None, :],
@@ -509,7 +513,7 @@ class Trainer:
         ender = torch.cuda.Event(enable_timing=True)
         starter.record()
         
-        linear_schedule = torch.arange(2,0,-0.2)
+        linear_schedule = torch.arange(0.1,0,-0.01)
        
         
         world_vertex = {}
@@ -524,14 +528,11 @@ class Trainer:
             self.step += 1
             step_ratio = min(1, self.step / self.opt.iters)
             overall_loss= 0
-            # self.optimizer.zero_grad()
-
+          
             # update lr
-            # self.renderer.gaussians.update_learning_rate(self.step)
             pbar = tqdm.tqdm(self.dataloader)
             for iter, data in enumerate(pbar):
-                
-                # import ipdb;ipdb.set_trace()
+
                 loss = 0
                 self.optimizer.zero_grad()
                 
@@ -546,8 +547,7 @@ class Trainer:
                     trans = smpl_params['Th'].float().to(self.device)
                     rot = smpl_params['Rh'].float().to(self.device)  
                 
-              
-                # bbox = data['bbox']
+ 
                 
                 
                 
@@ -564,16 +564,13 @@ class Trainer:
                 data['w2c'] = data['w2c'].view((-1,4,4))
                 data['fovy'] = data['fovy'].view((-1))
                 data['fovx'] = data['fovx'].view((-1))
-                
-                # import ipdb;ipdb.set_trace()
 
                 cam_list= [ ]
                 full_proj_cam_list = [ ]
                 world_cam_list = []
 
-                # for i in range(len(data['w2c'])):  
-                for i in range(1):
-                   
+                for i in range(self.opt.multi_view):  
+
                     cam = MiniCam(
                         data['w2c'][i],
                         self.W,
@@ -590,36 +587,24 @@ class Trainer:
                     full_proj_cam_list.append(cam.full_proj_transform.to(self.device))
                     world_cam_list.append(cam.world_view_transform.to(self.device))
                     
-                # crop_imgs = []    
-                # temp = torch.zeros((len(bbox),3,1000,1000)).to(self.device)
-                # if self.opt.crop_image and bbox is not None:
-                    
-                #     for index in range(len(bbox)):
-                #         import ipdb;ipdb.set_trace()
-                #         cropped = gt_images[index,...,bbox[index,2]:bbox[index,0],bbox[index,3]:bbox[index,1]]
-                        
-                #         x = (900//2 - (bbox[index,0]-bbox[index,2])//2).int()
-                #         y = (900//2 - (bbox[index,1]-bbox[index,2])//2).int()
-                #         try:
-                #             temp[index][...,x:x+(bbox[index,0]-bbox[index,2]), y: y+(bbox[index,1]-bbox[index,3])] = cropped
-                #         except:
-                #             import ipdb;ipdb.set_trace()
-                
-                    # crop_imgs = torch.stack(crop_imgs,dim=0)
+               
                 cam_list = torch.stack(cam_list,dim=0)
                 full_proj_cam_list = torch.stack(full_proj_cam_list,dim=0) 
                 world_cam_list = torch.stack(world_cam_list,dim=0)   
-                # import ipdb;ipdb.set_trace()
-                # gt_images = gt_images.view((-1,3,self.H,self.W))
+                if self.opt.multi_view == 1 and len(gt_images.shape) ==4  :
+                    temp_gt_images = gt_images[0]
+                else:
+                    temp_gt_images = gt_images.view((-1,3,self.H,self.W))
                 if self.opt.param_input:
-                    means3D, opacity, scales, shs, rotations = self.encoder((pose,shape,rot,trans),img=gt_images,cam = full_proj_cam_list)
+                    means3D, opacity, scales, shs, rotations = self.encoder((pose,shape),img=temp_gt_images,cam = full_proj_cam_list)
                 else:  
-                    means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=gt_images,cam = cam_list)
+                    means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=temp_gt_images,cam = cam_list)
+                    
                 if self.encoder.upsample != 1:
                     vertices = vertices.repeat( 1,self.encoder.upsample, 1)
                 scales = scales * self.opt.scale_factor
-                # for idx in range(len(data['w2c'])):
-                for idx in range(1):   
+                for idx in range(self.opt.multi_view):
+
                     cam = MiniCam(
                         data['w2c'][idx],
                         self.W,
@@ -632,11 +617,11 @@ class Trainer:
                 
                     bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
                     
-                    
+                    self.encoder.train()
                     if self.opt.multi_view > 1:
                         
                         out = self.renderer.render(cam,
-                                                vertices[idx]+means3D[0],
+                                                 vertices[idx]+means3D[0],
                                                 opacity[0],
                                                 scales[0],
                                                 shs[0][:, None, :],
@@ -659,129 +644,107 @@ class Trainer:
                     image_mask = image.clone()
                     image_mask[image_mask>0] = 1
                     
-                    if self.reg_loss is not None and epoch == 0:
-                        
-                        # loss = loss+ self.IOU_loss(image_mask[0],mask[idx]) * 1000
-                    #     # loss = loss+ self.reg_loss(means3D[idx], torch.rand_like(means3D[idx])*torch.mean(std)*0.5) *self.opt.smpl_reg_scale 
-                        if self.opt.multi_view <=1:
+
+                       
                             
-                            loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) *self.opt.smpl_reg_scale
-                        else:
-                            # import ipdb;ipdb.set_trace()
-                            
-                            loss = loss+ self.reg_loss(means3D[0], torch.zeros_like(means3D[0])) *self.opt.smpl_reg_scale 
+                    if self.opt.multi_view > 1  and idx == 0:
+                        loss = loss+ self.reg_loss(means3D[0], torch.zeros_like(means3D[0])) * linear_schedule[min(ep,9)]
+                    elif self.opt.multi_view<=1:
+                        loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) *self.opt.smpl_reg_scale
                     else:
-                    # import ipdb;ipdb.set_trace()
-                        assert len(image_mask[0])==2
-                        loss = loss+ self.IOU_loss(image_mask[0],mask[idx]) * self.opt.IOU_weight
-                        
-                        
-                    
-                    # import ipdb;ipdb.set_trace()
-                    
-                    # else:
-                        # loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.1
-                        # linear_schedule[min(epoch,19)]
-                        
-                    # elif self.reg_loss is not None and epoch >2 and epoch <= 5 :
-                        # loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.8
-                    # else:
-                    #     loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * 0.2
-                    # import ipdb;ipdb.set_trace()
+                        pass
+                    assert len(image_mask[0].shape)==2
+                  
+         
                     if self.reconstruct_loss is not None:
                         loss = loss+self.reconstruct_loss(image * mask[idx:idx+1, None,:, :], gt_images[idx:idx+1])
                     
-                    if iter % 100 == 0 and idx == 0:
+                    if iter % 100 == 0 :
                         np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
-                        # smpl_image = smpl_image[0].detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
-                        
-                        # masked = target_img * mask[0].cpu().numpy()[...,None]
-                        
                         depth_img = depth.detach().cpu().numpy()
                         
                         # proj = (cam_list[idx] @ vertices[idx].T).T
                         # proj[:, :2] /= proj[:, 2:]
                         # plt.imshow(target_img)
                         # plt.scatter(data['vertices'].float()[...,0],data['vertices'].float()[...,1],c='r')
-                        # import ipdb;ipdb.set_trace()
-                        
-                        cv2.imwrite(os.path.join(self.opt.vis_path,f'{iter}.jpg'), np.concatenate((target_img, np_img), axis=1)*255.0)
-                        plt.imsave(os.path.join(self.opt.vis_depth_path,f'{iter}.jpg'), depth_img)
-                        
-                        
-                        
-                    # if iter % 400 ==0:
-                        
-                    #     cam = MiniCam(
-                    #         data['w2c'][-1],
-                    #         self.W,
-                    #         self.H,
-                    #         data['fovy'][-1],
-                    #         data['fovx'][-1],
-                    #         self.near,
-                    #         self.far,
-                    #     )
-                    #     # import ipdb;ipdb.set_trace()
-                            
-                            
-                            
-                    #     bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
-                    
-                    
-                    #     if self.opt.multi_view > 1:
-                            
-                    #         out = self.renderer.render(cam,
-                    #                                 vertices[idx]+means3D[0],
-                    #                                 opacity[0],
-                    #                                 scales[0],
-                    #                                 shs[0][:, None, :],
-                    #                                 rotations[0],
-                    #                                 bg_color=bg_color)
-                        
-                    #     else:    
-                    #         out = self.renderer.render(cam,
-                    #                                 vertices[idx]+means3D[idx],
-                    #                                 opacity[idx],
-                    #                                 scales[idx],
-                    #                                 shs[idx][:, None, :],
-                    #                                 rotations[idx],
-                    #                                 bg_color=bg_color)
-                    
-                    #     image = out["image"] # [1, 3, H, W] in [0, 1]
-                    #     depth = out['depth'].squeeze() # [H, W]
-                        
-                        
-                    #     image_mask = image.clone()
-                    #     image_mask[image_mask>0] = 1
-                        
-                        
-                    #     np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
-                    #     target = gt_images[-1].cpu().numpy().transpose(1, 2, 0)
-                    #     # target_img = self_sec[idx].cpu().numpy().transpose(1, 2, 0)
-                            
-                    #     # plt.scatter(proj[:,0],proj[:,1],c='r')
-                    #     cv2.imwrite(f'{self.opt.vis_second_view}/{iter}.jpg', np.concatenate((target, np_img), axis=1) * 255)
-                        # import ipdb;ipdb.set_trace()
 
-                        # plt.savefig(os.path.join(self.opt.vis_path,f'test_{iter}.jpg'), proj)
-                        # cv2.imwrite(f'./vis_mask/{iter}.jpg', np.concatenate((target_img, masked), axis=1) * 255)
+                        cv2.imwrite(os.path.join(self.opt.vis_path,f'{iter}_view{idx}.jpg'), np.concatenate((target_img, np_img), axis=1)*255.0)
+                        plt.imsave(os.path.join(self.opt.vis_depth_path,f'{iter}_view{idx}.jpg'), depth_img)
+                        
+                    if iter %100 ==  0:
+                        
+                        if self.opt.multi_view > 1:
+                           
+                            self.save_ply(self.opt.vis_ply_path, vertices[idx]+means3D[0],opacity[0],scales[0],rotations[0],shs[0],iter)
+                        else:
+                            self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[idx],opacity[idx],scales[idx],rotations[idx],shs[idx],iter)
+
+                    if iter % 100 ==0:
+                        with torch.no_grad():
+                            if self.opt.multi_view == 1 and len(self.data_config.camera_list) > 1:
+                                self.encoder.eval()
+                                for j in range(1,len(self.data_config.camera_list)):
+                                    cam = MiniCam(
+                                        data['w2c'][j],
+                                        self.W,
+                                        self.H,
+                                        data['fovy'][j],
+                                        data['fovx'][j],
+                                        self.near,
+                                        self.far,
+                                    )
+                                        
+                                        
+                                        
+                                    bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
+                                
+                                
+                                    if self.opt.multi_view > 1:
+                                        
+                                        out = self.renderer.render(cam,
+                                                                 vertices[idx]+means3D[0],
+                                                                opacity[0],
+                                                                scales[0],
+                                                                shs[0][:, None, :],
+                                                                rotations[0],
+                                                                bg_color=bg_color)
+                                
+                                    else:    
+                                        out = self.renderer.render(cam,
+                                                                vertices[idx]+means3D[idx],
+                                                                opacity[idx],
+                                                                scales[idx],
+                                                                shs[idx][:, None, :],
+                                                                rotations[idx],
+                                                                bg_color=bg_color)
+                                    
+                                
+                                    image = out["image"] # [1, 3, H, W] in [0, 1]
+                                    depth = out['depth'].squeeze() # [H, W]
+                                    
+                                    
+                                    image_mask = image.clone()
+                                    image_mask[image_mask>0] = 1
+                                    
+                                
+                                    np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
+                                    target = gt_images[j].cpu().numpy().transpose(1, 2, 0)
+                             
+                                    cv2.imwrite(f'{self.opt.vis_second_view}/{iter}_view{j}.jpg', np.concatenate((target, np_img), axis=1) * 255)
                         
                 pbar.set_postfix({'Loss': f'{loss.item():.5f}'})
-                # import ipdb;ipdb.set_trace()
-                # pbar.set_postfix({'alpha': f'{self.alpha.item():.3f}'})
-                # optimize step
-                # import ipdb;ipdb.set_trace()
+              
                 if epoch > 0 and loss.item() > 0.001:
                     import ipdb;ipdb.set_trace()
                 loss.backward()
                 overall_loss+=loss.item()
                 self.optimizer.step()
-                self.writer.add_scalar('Train/Loss', loss.item(), global_step=ep*len(self.dataloader)+iter)   
+                self.writer.add_scalar('Train/Loss', loss.item()/len(data['w2c']), global_step=ep*len(self.dataloader)+iter)   
               
                  
             self.scheduler.step()
-            self.writer.add_scalar('Train/Loss Epoch', overall_loss/len(self.dataloader), global_step=ep) 
+            self.writer.add_scalar('Train/Loss Epoch', overall_loss/(len(self.dataloader)*len(data['w2c'])), global_step=ep) 
                 
 
         ender.record()
@@ -799,12 +762,45 @@ class Trainer:
             
         
 
-        # dynamic train steps (no need for now)
-        # max allowed train time per-frame is 500 ms
-        # full_t = t / self.train_steps * 16
-        # train_steps = min(16, max(4, int(16 * 500 / full_t)))
-        # if train_steps > self.train_steps * 1.2 or train_steps < self.train_steps * 0.8:
-        #     self.train_steps = train_steps
+   
+    def construct_list_of_attributes(self):
+        l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
+        # All channels except the 3 DC
+        for i in range(3):
+            l.append('f_dc_{}'.format(i))
+        l.append('opacity')
+        for i in range(3):
+            l.append('scale_{}'.format(i))
+        for i in range(4):
+            l.append('rot_{}'.format(i))
+        return l
+        
+    def save_ply(self, path, xyz, opacity, scale, rotation, color, idx):
+        os.makedirs(path,exist_ok=True)
+
+        xyz = xyz.detach().cpu().numpy()
+        normals = np.zeros_like(xyz)
+        # f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        # f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        opacities = opacity.detach().cpu().numpy()
+        scale = scale.detach().cpu().numpy()
+        rotation = rotation.detach().cpu().numpy()
+        color = color.detach().cpu().numpy()
+
+        dtype_full = [(attribute,'f4') for attribute in self.construct_list_of_attributes()]
+        
+
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        
+        attributes = np.concatenate((xyz, normals, color, opacities, scale, rotation), axis=1)
+        
+
+        attributes = [tuple(row) for row in attributes]
+   
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+
+        PlyData([el]).write(os.path.join(path,f'{idx}.ply'))
 
     @torch.no_grad()
     def test_step(self):
@@ -1383,6 +1379,8 @@ class Trainer:
             if self.training:
                 self.train_step()
             self.test_step()
+            
+            
             dpg.render_dearpygui_frame()
             
         
