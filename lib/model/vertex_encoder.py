@@ -198,19 +198,17 @@ class VertexTransformer(nn.Module):
         # self.downsamnple_conv = nn.Conv1d(img_dim, img_dim//2, kernel_size=1)
         
         if self.param_input:
-            self.shape = nn.Linear(10, hidden_dim, bias=False)
+            self.beta = nn.Linear(10, hidden_dim, bias=False)
             
-            self.pose = nn.Linear(pose_num*3, hidden_dim, bias=False)
+            self.theta = nn.Linear(pose_num*3, hidden_dim, bias=False)
             self.rotate = nn.Linear(3, hidden_dim, bias=False)
             self.trans = nn.Linear(3, hidden_dim, bias=False)
         if self.dino:
-            
             if self.opt.full_token and self.opt.reshape: 
                 self.processor = ViTImageProcessor.from_pretrained('facebook/dino-vits16')
                 config=ViTConfig.from_pretrained('facebook/dino-vits16')
                 self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16',config=config,ignore_mismatched_sizes=True).to(self.device)
             elif self.opt.full_token:
-               
                 self.processor = ViTImageProcessor.from_pretrained('facebook/dino-vits16')
                 self.processor.size['height'] = H
                 self.processor.size['width'] = W
@@ -219,8 +217,12 @@ class VertexTransformer(nn.Module):
                 config.image_size = (H, W)
                 self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16',config=config,ignore_mismatched_sizes=True).to(self.device)
             else:
-               
                 self.dino_encoder = torch.hub.load('facebookresearch/dino:main', self.dino.path).patch_embed.to(self.device)
+
+        if self.dino_update:
+            self.dino_encoder.train()
+        else:
+            self.dino_encoder.eval()
 
         self.encoder = Transformer(hidden_dim, num_layers, nhead, dim_head, mlp_dim, cross=self.cross_attention,dropout=dropout)
         if self.opt.trans_decoder:
@@ -285,31 +287,21 @@ class VertexTransformer(nn.Module):
 
             if not self.dino_update and self.opt.full_token:
                 with torch.no_grad():
-                    self.dino_encoder.eval()
                     inputs = self.processor(images=img, return_tensors="pt").to(self.device)
                     img_emb = self.dino_encoder(**inputs)
                     img_emb = img_emb['last_hidden_state'][...,1:,:]
                     
             elif self.opt.full_token:
-                
-                self.dino_encoder.train()
-                
                 inputs = self.processor(images=img, return_tensors="pt").to(self.device)
                 img_emb = self.dino_encoder(**inputs)
                 img_emb = img_emb['last_hidden_state'][...,1:,:]
             elif self.dino_update:
-                self.dino_encoder.train()
                 img_emb = self.dino_encoder(img)
             else:
                 with torch.no_grad():
-                    self.dino_encoder.eval()
                     if len(img.shape) == 3:
                         img = img.unsqueeze(0)
                     img_emb = self.dino_encoder(img)
-                    
-                    # img_emb  = self.img_downconv(img_emb)
-                    
-
 
             assert cam is not None
             cam_emb = self.cam_proj(cam.reshape(cam.shape[0],-1))[:,None,:]
@@ -318,21 +310,20 @@ class VertexTransformer(nn.Module):
                 emb = self.img_down(img_emb+ cam_emb)
             else:
                 emb = self.img_down(img_emb[0].unsqueeze(0))
-
+        import ipdb; ipdb.set_trace()
             
         if self.param_input:
-            pose = x[0]
-            shape = x[1]
+            theta = x[0]
+            beta = x[1]
           
-            pose = self.pose(pose)
-            shape = self.shape(shape)
+            theta = self.theta(theta)
+            beta = self.beta(beta)
             
-         
-            if len(pose.shape) == 2:
-                pose = pose[:,None,:]
-                shape = shape[:,None,:]
+            if len(theta.shape) == 2:
+                theta = theta[:,None,:]
+                beta = beta[:,None,:]
                 
-            x = torch.cat((pose,shape),dim=1)
+            x = torch.cat((theta, beta),dim=1)
             x = self.pre_norm(x)
             if mask is not None:
                 x = self.masking(x, mask)
