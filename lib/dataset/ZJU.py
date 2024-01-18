@@ -57,6 +57,7 @@ class ZJU(Dataset):
             for j in range(len(array[i])):
                 res.append(array[i][j])
         return np.array(res)
+    
     def read_data(self):
         
         self.seqid = []
@@ -127,34 +128,21 @@ class ZJU(Dataset):
         self.image_path = np.array(self.image_path)
         self.mask_path = np.array(self.mask_path)
         self.camera_params = np.array(self.camera_params)
-        
-
-        
-        
-       
             
     def get_bbox(self,mask,new_H,new_W):
         non_zero_pixels = np.nonzero(mask)
         minx,miny = np.min(non_zero_pixels, axis=1)
         maxx,maxy = np.max(non_zero_pixels, axis=1)
-        
       
         return (maxx,maxy,minx,miny)
-        
-        
 
     def __getitem__(self, index):
        
         w2c = np.stack([np.eye(4).astype(np.float32)]*len(self.camera_list))
         index = index * self.sample_rate
         
-        
-        
         vertices = self.vertices[index % len(self.vertices)]
         smpl_param = self.smpl_params[index % len(self.vertices)]
-        
-        
-        
         
         image_list = []
         mask_list = []
@@ -162,7 +150,6 @@ class ZJU(Dataset):
         fovy = []
         v = []
         K = []
-        
 
         for i in range(len(self.camera_list)):
             
@@ -203,7 +190,6 @@ class ZJU(Dataset):
             fovy.append(2 * np.arctan2(1024, 2 * self.camera_params[i]['Ks'][self.seqid[index]][1, 1]))
               
         return {
-            
             'vertices': np.array(v)[...,:3],
             'image': np.array(image_list),
             'mask': np.array(mask_list),

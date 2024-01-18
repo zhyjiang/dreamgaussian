@@ -232,8 +232,6 @@ class VertexTransformer(nn.Module):
         
         self.merge_views = nn.Conv1d(self.opt.multi_view, 1, kernel_size=1) if self.opt.multi_view>1 else None
         
-       
-            
         self.mask_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         self.upsample = self.opt.upsample
         self.cam_proj = nn.Linear(4*4, 384)

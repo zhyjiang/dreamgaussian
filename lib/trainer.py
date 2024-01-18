@@ -590,23 +590,23 @@ class Trainer:
                     image_mask = image.clone()
                     image_mask[image_mask>0] = 1
 
-                    if self.opt.multi_view > 1  and idx == 0:
+                    if self.opt.multi_view > 1 and idx == 0:
                         loss = loss + self.reg_loss(means3D[0], torch.zeros_like(means3D[0])) * linear_schedule[min(ep,9)]
                     elif self.opt.multi_view<=1:
                         loss = loss + self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * self.opt.smpl_reg_scale
                     else:
                         pass
                     assert len(image_mask[0].shape)==2
-                  
+
                     if self.reconstruct_loss is not None:
                         # loss = loss + self.reconstruct_loss(image * mask[idx:idx+1, None,:, :], gt_images[idx:idx+1])
-                        loss = loss + self.reconstruct_loss(image, gt_images[idx:idx+1])
-                    
+                        loss = loss + self.reconstruct_loss(image, gt_images[idx])
+
                     if iter % 100 == 0 :
                         np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
                         depth_img = depth.detach().cpu().numpy()
-                        
+
                         # proj = (cam_list[idx] @ vertices[idx].T).T
                         # proj[:, :2] /= proj[:, 2:]
                         # plt.imshow(target_img)
@@ -615,62 +615,61 @@ class Trainer:
                         cv2.imwrite(os.path.join(self.opt.vis_path,f'{iter}_view{idx}.jpg'), np.concatenate((target_img, np_img), axis=1)*255.0)
                         plt.imsave(os.path.join(self.opt.vis_depth_path,f'{iter}_view{idx}.jpg'), depth_img)
                         
-                    if iter %100 ==  0:
+                    # if iter %100 ==  0:
                         
-                        if self.opt.multi_view > 1:
+                    #     if self.opt.multi_view > 1:
                            
-                            self.save_ply(self.opt.vis_ply_path, vertices[idx]+means3D[0],opacity[0],scales[0],rotations[0],shs[0],iter)
-                        else:
-                            self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[idx],opacity[idx],scales[idx],rotations[idx],shs[idx],iter)
+                    #         self.save_ply(self.opt.vis_ply_path, vertices[idx]+means3D[0],opacity[0],scales[0],rotations[0],shs[0],iter)
+                    #     else:
+                    #         self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[idx],opacity[idx],scales[idx],rotations[idx],shs[idx],iter)
 
-                    if iter % 100 ==0:
-                        with torch.no_grad():
-                            if self.opt.multi_view == 1 and len(self.data_config.camera_list) > 1:
-                                self.encoder.eval()
-                                for j in range(1,len(self.data_config.camera_list)):
-                                    cam = MiniCam(
-                                        data['w2c'][j],
-                                        self.W,
-                                        self.H,
-                                        data['fovy'][j],
-                                        data['fovx'][j],
-                                        self.near,
-                                        self.far,
-                                    )
+                    # if iter % 100 ==0:
+                    #     with torch.no_grad():
+                    if self.opt.multi_view == 1 and len(self.data_config.camera_list) > 1:
+                        # self.encoder.eval()
+                        for j in range(1, len(self.data_config.camera_list)):
+                            cam = MiniCam(
+                                data['w2c'][j],
+                                self.W,
+                                self.H,
+                                data['fovy'][j],
+                                data['fovx'][j],
+                                self.near,
+                                self.far,
+                            )
 
-                                    bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
-                                
-                                
-                                    if self.opt.multi_view > 1:
-                                        
-                                        out = self.renderer.render(cam,
-                                                                vertices[idx]+means3D[0],
-                                                                opacity[0],
-                                                                scales[0],
-                                                                shs[0][:, None, :],
-                                                                rotations[0],
-                                                                bg_color=bg_color)
-                                
-                                    else:    
-                                        out = self.renderer.render(cam,
-                                                                vertices[idx]+means3D[idx],
-                                                                opacity[idx],
-                                                                scales[idx],
-                                                                shs[idx][:, None, :],
-                                                                rotations[idx],
-                                                                bg_color=bg_color)
-                                    
-                                
-                                    image = out["image"] # [1, 3, H, W] in [0, 1]
-                                    depth = out['depth'].squeeze() # [H, W]
-                                    
-                                    image_mask = image.clone()
-                                    image_mask[image_mask>0] = 1
-                                    
-                                    np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
-                                    target = gt_images[j].cpu().numpy().transpose(1, 2, 0)
-                             
-                                    cv2.imwrite(f'{self.opt.vis_second_view}/{iter}_view{j}.jpg', np.concatenate((target, np_img), axis=1) * 255)
+                            bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
+
+                            if self.opt.multi_view > 1:
+                                out = self.renderer.render(cam,
+                                                        vertices[idx] + means3D[0],
+                                                        opacity[0],
+                                                        scales[0],
+                                                        shs[0][:, None, :],
+                                                        rotations[0],
+                                                        bg_color=bg_color)
+                            else:    
+                                out = self.renderer.render(cam,
+                                                        vertices[idx] + means3D[idx],
+                                                        opacity[idx],
+                                                        scales[idx],
+                                                        shs[idx][:, None, :],
+                                                        rotations[idx],
+                                                        bg_color=bg_color)
+                            
+                        
+                            image = out["image"] # [1, 3, H, W] in [0, 1]
+                            depth = out['depth'].squeeze() # [H, W]
+                            
+                            image_mask = image.clone()
+                            image_mask[image_mask>0] = 1
+                            loss = loss + self.reconstruct_loss(image, gt_images[j])
+
+                            np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
+                            target = gt_images[j].cpu().numpy().transpose(1, 2, 0)
+                        
+                            if iter % 100 ==0:
+                                cv2.imwrite(f'{self.opt.vis_second_view}/{iter}_view{j}.jpg', np.concatenate((target, np_img), axis=1) * 255)
                         
                 pbar.set_postfix({'Loss': f'{loss.item():.5f}', 
                                   'DB': f'{scales.mean().item():.5f}'})
@@ -682,7 +681,7 @@ class Trainer:
                 self.optimizer.step()
                 self.writer.add_scalar('Train/Loss', loss.item()/len(data['w2c']), global_step=ep*len(self.dataloader)+iter)   
               
-                 
+            self.opt.smpl_reg_scale *= 0.9
             self.scheduler.step()
             self.writer.add_scalar('Train/Loss Epoch', overall_loss/(len(self.dataloader)*len(data['w2c'])), global_step=ep) 
                 
