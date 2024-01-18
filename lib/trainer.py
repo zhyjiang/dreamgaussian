@@ -126,17 +126,10 @@ class Trainer:
         self.input_mask_torch = None
         self.overlay_input_img = False
         self.overlay_input_img_ratio = 0.5
-        
-        
-          
-            
-        # self.alpha = torch.nn.Parameter(torch.tensor(0.5),requires_grad=True).to(self.device)
 
         # input text
         self.prompt = ""
         self.negative_prompt = ""
-        
-        
 
         # training stuff
         self.training = False
@@ -351,9 +344,6 @@ class Trainer:
         
             
             for epoch in range(self.eval_steps):
-
-                
-
                 psnr_l = []
                 ssim_l = []
                 psnr_l_normed = []
@@ -362,13 +352,11 @@ class Trainer:
                 
                 pbar = tqdm.tqdm(self.testloader)
                 for iter, data in enumerate(pbar):
-                    
                     vertices = data['vertices'].float().to(self.device)
                     
                     gt_images = data['image'].view((-1,3,self.H,self.W)).float().to(self.device)
                     mask = data['mask'].view((-1,self.H,self.W)).float().to(self.device)
                     gt_images = gt_images * mask[:, None, :, :]
-                    
                     
                     vertices = vertices.view((-1,6890,3))
                     data['w2c'] = data['w2c'].view((-1,4,4))
@@ -389,13 +377,10 @@ class Trainer:
                                 self.near,
                                 self.far,
                             ) 
-                        
-                       
+
                             cam_list.append(cam.projection_matrix.to(self.device))
                             full_proj_cam_list.append(cam.full_proj_transform.to(self.device))
 
-
-                        
                     cam_list = torch.stack(cam_list,dim=0)
                     full_proj_cam_list = torch.stack(full_proj_cam_list,dim=0)
                     if self.opt.param_input:
@@ -408,20 +393,14 @@ class Trainer:
                     
                     if self.opt.param_input:
                         means3D, opacity, scales, shs, rotations = self.encoder((pose,shape),img=gt_images,cam = full_proj_cam_list)
-                    
                     else:
                         means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=gt_images,cam = cam_list)
                     if self.encoder.upsample != 1:
                         vertices = vertices.repeat( 1,self.encoder.upsample, 1)
                     scales = scales * self.opt.scale_factor
                     
-                    
-                    
                     # for idx in range(len(vertices)):
                     for idx in range(self.opt.multi_view):
-                        
-                        
-                        
                         cam = MiniCam(
                             data['w2c'][idx],
                             self.W,
@@ -434,7 +413,6 @@ class Trainer:
                         bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
                         
                         if self.opt.multi_view > 1:
-                            
                             out = self.renderer.render(cam,
                                                      vertices[idx]+means3D[0],
                                                     opacity[0],
@@ -443,7 +421,6 @@ class Trainer:
                                                     rotations[0],
                                                     bg_color=bg_color)
                         else:
-                        
                             out = self.renderer.render(cam,
                                                     vertices[idx]+means3D[idx],
                                                     opacity[idx],
@@ -454,23 +431,16 @@ class Trainer:
                         image = out["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
                         depth = out['depth'].squeeze() # [H, W]
                         
-                        
                         np_img = image[0].detach().cpu().numpy()
                         np_imgs.append(np_img)
                         
                         np_img = np_img.transpose(1, 2, 0)
                         
-                        
                         target_img = gt_images[idx].cpu().numpy()
                         
                         gt_imgs.append(target_img)
                         target_img = target_img.transpose(1, 2, 0)
-                        
-                        
-                        
-                      
-                        #     # masked = target_img * mask[0].cpu().numpy()[...,None]
-                            
+
                         depth_img = depth.detach().cpu().numpy()
                         #     cv2.imwrite(f'./vis_temp/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
                         plt.imsave(os.path.join(self.opt.vis_eval_depth_path,f'{iter}.jpg'), depth_img)
@@ -484,28 +454,15 @@ class Trainer:
                         psnr_l_normed.append(self.psnr_metric(pred_img_norm, gt_img_norm))
   
                         ssim_l.append(skimage.metrics.structural_similarity( gt_img_norm,pred_img_norm, multichannel=True,channel_axis=-1,data_range=1.0))   
-                
-                
-                
+
                 if self.lpips is not None:
-                        
                     self.lpips.eval()
-    
-                            
-                        
-                            
                     lpips_res = self.lpips(torch.tensor(np.array(np_imgs)), torch.tensor(np.array(gt_imgs)))
                 self.writer.add_scalar('psnr_eval', np.array(psnr_l).mean(),global_step=ep)        
                 self.writer.add_scalar('psnr_normed_eval', np.array(psnr_l_normed).mean(),global_step=ep)
                 self.writer.add_scalar('ssim_eval', np.array(ssim_l).mean(),global_step=ep)
                 if self.lpips is not None:
                     self.writer.add_scalar('lpips_eval',lpips_res.item(),global_step=ep)
-                
-          
-
-                
-
-        
 
     def train_step(self,ep):
         
@@ -536,7 +493,6 @@ class Trainer:
                 loss = 0
                 self.optimizer.zero_grad()
                 
-                
                 vertices = data['vertices'].float().to(self.device)
                 
                 if 'smpl_param' in data.keys():
@@ -546,14 +502,8 @@ class Trainer:
                     shape = smpl_params['shapes'].float().to(self.device)
                     trans = smpl_params['Th'].float().to(self.device)
                     rot = smpl_params['Rh'].float().to(self.device)  
-                
- 
-                
-                
-                
-                
+
                 gt_images = data['image'].float().to(self.device).view((-1,3,self.H,self.W))
-                
                 
                 mask = data['mask'].float().to(self.device).view((-1,self.H,self.W))
                 if len(mask.shape) != len(gt_images.shape):
@@ -579,9 +529,7 @@ class Trainer:
                         data['fovx'][i],
                         self.near,
                         self.far,
-                    ) 
-                    
-                    
+                    )
                   
                     cam_list.append(cam.projection_matrix.to(self.device))
                     full_proj_cam_list.append(cam.full_proj_transform.to(self.device))
@@ -604,7 +552,6 @@ class Trainer:
                     vertices = vertices.repeat( 1,self.encoder.upsample, 1)
                 scales = scales * self.opt.scale_factor
                 for idx in range(self.opt.multi_view):
-
                     cam = MiniCam(
                         data['w2c'][idx],
                         self.W,
@@ -639,25 +586,21 @@ class Trainer:
                    
                     image = out["image"] # [1, 3, H, W] in [0, 1]
                     depth = out['depth'].squeeze() # [H, W]
-                    
-                    
+
                     image_mask = image.clone()
                     image_mask[image_mask>0] = 1
-                    
 
-                       
-                            
                     if self.opt.multi_view > 1  and idx == 0:
-                        loss = loss+ self.reg_loss(means3D[0], torch.zeros_like(means3D[0])) * linear_schedule[min(ep,9)]
+                        loss = loss + self.reg_loss(means3D[0], torch.zeros_like(means3D[0])) * linear_schedule[min(ep,9)]
                     elif self.opt.multi_view<=1:
-                        loss = loss+ self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) *self.opt.smpl_reg_scale
+                        loss = loss + self.reg_loss(means3D[idx], torch.zeros_like(means3D[idx])) * self.opt.smpl_reg_scale
                     else:
                         pass
                     assert len(image_mask[0].shape)==2
                   
-         
                     if self.reconstruct_loss is not None:
-                        loss = loss+self.reconstruct_loss(image * mask[idx:idx+1, None,:, :], gt_images[idx:idx+1])
+                        # loss = loss + self.reconstruct_loss(image * mask[idx:idx+1, None,:, :], gt_images[idx:idx+1])
+                        loss = loss + self.reconstruct_loss(image, gt_images[idx:idx+1])
                     
                     if iter % 100 == 0 :
                         np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
@@ -694,16 +637,14 @@ class Trainer:
                                         self.near,
                                         self.far,
                                     )
-                                        
-                                        
-                                        
+
                                     bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
                                 
                                 
                                     if self.opt.multi_view > 1:
                                         
                                         out = self.renderer.render(cam,
-                                                                 vertices[idx]+means3D[0],
+                                                                vertices[idx]+means3D[0],
                                                                 opacity[0],
                                                                 scales[0],
                                                                 shs[0][:, None, :],
@@ -723,17 +664,16 @@ class Trainer:
                                     image = out["image"] # [1, 3, H, W] in [0, 1]
                                     depth = out['depth'].squeeze() # [H, W]
                                     
-                                    
                                     image_mask = image.clone()
                                     image_mask[image_mask>0] = 1
                                     
-                                
                                     np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
                                     target = gt_images[j].cpu().numpy().transpose(1, 2, 0)
                              
                                     cv2.imwrite(f'{self.opt.vis_second_view}/{iter}_view{j}.jpg', np.concatenate((target, np_img), axis=1) * 255)
                         
-                pbar.set_postfix({'Loss': f'{loss.item():.5f}'})
+                pbar.set_postfix({'Loss': f'{loss.item():.5f}', 
+                                  'DB': f'{scales.mean().item():.5f}'})
               
                 if epoch > 0 and loss.item() > 0.001:
                     import ipdb;ipdb.set_trace()

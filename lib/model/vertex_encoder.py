@@ -239,7 +239,7 @@ class VertexTransformer(nn.Module):
         self.cam_proj = nn.Linear(4*4, 384)
         self.img_down = nn.Linear(384,hidden_dim)
         if self.opt.trans_decoder:
-            self.learning_query = nn.Parameter(torch.randn((self.opt.batch_size, num_joints, hidden_dim)),requires_grad=True)
+            self.learning_query = nn.Parameter(torch.randn((self.opt.batch_size, num_joints, hidden_dim)), requires_grad=True)
             self.upsample_layer = nn.Conv1d(num_joints, num_joints*self.opt.upsample, kernel_size=1)
         self.initialize_weights()
         
@@ -310,7 +310,6 @@ class VertexTransformer(nn.Module):
                 emb = self.img_down(img_emb+ cam_emb)
             else:
                 emb = self.img_down(img_emb[0].unsqueeze(0))
-        import ipdb; ipdb.set_trace()
             
         if self.param_input:
             theta = x[0]
@@ -344,7 +343,7 @@ class VertexTransformer(nn.Module):
             x = torch.cat((emb, x), dim=1)
             # x = self.pre_conv(x)  # 6890+4096 -> 2000
 
-        x = x+self.positional_emb
+        x = x + self.positional_emb
         x = self.dropout(x)
         
         
@@ -368,7 +367,6 @@ class VertexTransformer(nn.Module):
         if self.upsample != 1 and not self.opt.trans_decoder:
             x = self.upsample_conv(x) # 2000+4096 -> 6890*n
 
-        
         means3D = self.mean3D_head(x)
         opacity = self.opacity_head(x).sigmoid()
         shs = self.shs_head(x)
