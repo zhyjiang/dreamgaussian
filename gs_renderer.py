@@ -132,14 +132,18 @@ class GaussianModel:
             return symm
         
         self.scaling_activation = torch.exp
+        # self.scaling_activation = torch.sigmoid
         self.scaling_inverse_activation = torch.log
+        # self.scaling_inverse_activation = inverse_sigmoid
 
         self.covariance_activation = build_covariance_from_scaling_rotation
 
         self.opacity_activation = torch.sigmoid
         self.inverse_opacity_activation = inverse_sigmoid
 
-        self.rotation_activation = torch.nn.functional.normalize
+        # self.rotation_activation = torch.nn.functional.normalize
+        # self.inverse_rotation_activation = torch.nn.functional.normalize
+        self.rotation_activation = torch.sigmoid
 
 
     def __init__(self, sh_degree : int):
@@ -328,6 +332,35 @@ class GaussianModel:
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
+    def update(self, spatial_lr_scale ,values):
+        # import ipdb;ipdb.set_trace()
+        data = np.load(values)
+        
+        shs = torch.tensor(data['color'][0]).cuda().float()
+        rotations = torch.tensor(data['rotation'][0]).cuda().float()
+        scales = self.scaling_inverse_activation(torch.tensor(data['scale'][0]).cuda()).float()
+        means3D = torch.tensor(data['vertex']).cuda().float()
+        opacity = self.inverse_opacity_activation(torch.tensor(data['alpha'][0]).cuda()).float()
+        
+        
+        
+        self.spatial_lr_scale = spatial_lr_scale
+        # import ipdb;ipdb.set_trace()
+        # fused_color = RGB2SH(shs)
+        fused_color = shs
+        features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        features[:, :3, 0 ] = fused_color
+        features[:, 3:, 1:] = 0.0
+
+        self._xyz = nn.Parameter(means3D.requires_grad_(True))
+        self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
+        self._scaling = nn.Parameter(scales.requires_grad_(True))
+        self._rotation = nn.Parameter(rotations.requires_grad_(True))
+        self._opacity = nn.Parameter(opacity.requires_grad_(True))
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        # import ipdb;ipdb.set_trace()
+    
     def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float = 1):
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
@@ -643,8 +676,11 @@ def getProjectionMatrix(znear, zfar, fovX, fovY):
 
 
 class MiniCam:
-    def __init__(self, c2w, width, height, fovy, fovx, znear, zfar):
+    def __init__(self, w2c, width, height, fovy, fovx, znear, zfar):
         # c2w (pose) should be in NeRF convention.
+        
+        
+        w2c = torch.tensor(w2c).cuda()
 
         self.image_width = width
         self.image_height = height
@@ -653,11 +689,11 @@ class MiniCam:
         self.znear = znear
         self.zfar = zfar
 
-        w2c = np.linalg.inv(c2w)
+        # w2c = np.linalg.inv(c2w)
 
         # rectify...
-        w2c[1:3, :3] *= -1
-        w2c[:3, 3] *= -1
+        # w2c[1:3, :3] *= -1
+        # w2c[:3, 3] *= -1
 
         self.world_view_transform = torch.tensor(w2c).transpose(0, 1).cuda()
         self.projection_matrix = (
@@ -668,7 +704,7 @@ class MiniCam:
             .cuda()
         )
         self.full_proj_transform = self.world_view_transform @ self.projection_matrix
-        self.camera_center = -torch.tensor(c2w[:3, 3]).cuda()
+        self.camera_center = -torch.zeros_like(w2c[:3, 3]).cuda()
 
 
 class Renderer:
@@ -686,33 +722,46 @@ class Renderer:
             device="cuda",
         )
     
-    def initialize(self, input=None, num_pts=5000, radius=0.5):
+    
+    
+    def initialize(self, input=None, num_pts=6890, radius=0.5):
+        
+        # import ipdb;ipdb.set_trace()
+        self.gaussians.update(1,input)
+        
+        # import ipdb;ipdb.set_trace()
         # load checkpoint
-        if input is None:
-            # init from random point cloud
+        # if input is None:
+           
             
-            phis = np.random.random((num_pts,)) * 2 * np.pi
-            costheta = np.random.random((num_pts,)) * 2 - 1
-            thetas = np.arccos(costheta)
-            mu = np.random.random((num_pts,))
-            radius = radius * np.cbrt(mu)
-            x = radius * np.sin(thetas) * np.cos(phis)
-            y = radius * np.sin(thetas) * np.sin(phis)
-            z = radius * np.cos(thetas)
-            xyz = np.stack((x, y, z), axis=1)
+            # phis = np.random.random((num_pts,)) * 2 * np.pi
+            # costheta = np.random.random((num_pts,)) * 2 - 1
+            # thetas = np.arccos(costheta)
+            # mu = np.random.random((num_pts,))
+            # radius = radius * np.cbrt(mu)
+            # x = radius * np.sin(thetas) * np.cos(phis)
+            # y = radius * np.sin(thetas) * np.sin(phis)
+            # z = radius * np.cos(thetas)
+            # xyz = np.stack((x, y, z), axis=1)
             # xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
-
-            shs = np.random.random((num_pts, 3)) / 255.0
-            pcd = BasicPointCloud(
-                points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3))
-            )
-            self.gaussians.create_from_pcd(pcd, 10)
-        elif isinstance(input, BasicPointCloud):
-            # load from a provided pcd
-            self.gaussians.create_from_pcd(input, 1)
-        else:
-            # load from saved ply
-            self.gaussians.load_ply(input)
+            
+            
+        
+        # xyz = np.load('/home/zhongyuj/dreamgaussian/temp_ZJU_temp/scales_0.npz')['vertex']
+       
+        # shs = np.random.random((num_pts, 3)) / 255.0
+        # pcd = BasicPointCloud(
+        #     points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3))
+        # )
+        # self.gaussians.create_from_pcd(pcd, 10)
+        
+        
+        # elif isinstance(input, BasicPointCloud):
+            
+        #     self.gaussians.create_from_pcd(input, 1)
+        # else:
+        #     # load from saved ply
+        #     self.gaussians.load_ply(input)
 
     def render(
         self,
@@ -723,6 +772,8 @@ class Renderer:
         compute_cov3D_python=False,
         convert_SHs_python=False,
     ):
+        
+        bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
         # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
         screenspace_points = (
             torch.zeros_like(
@@ -766,35 +817,36 @@ class Renderer:
         # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
         # scaling / rotation by the rasterizer.
         scales = None
-        rotations = None
         cov3D_precomp = None
-        if compute_cov3D_python:
-            cov3D_precomp = self.gaussians.get_covariance(scaling_modifier)
-        else:
-            scales = self.gaussians.get_scaling
-            rotations = self.gaussians.get_rotation
+        # if compute_cov3D_python:
+        #     cov3D_precomp = self.gaussians.get_covariance(scaling_modifier)
+        # else:
+        scales = self.gaussians.get_scaling
+        rotations = self.gaussians.get_rotation
 
         # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
         # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
         shs = None
         colors_precomp = None
-        if colors_precomp is None:
-            if convert_SHs_python:
-                shs_view = self.gaussians.get_features.transpose(1, 2).view(
-                    -1, 3, (self.gaussians.max_sh_degree + 1) ** 2
-                )
-                dir_pp = self.gaussians.get_xyz - viewpoint_camera.camera_center.repeat(
-                    self.gaussians.get_features.shape[0], 1
-                )
-                dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
-                sh2rgb = eval_sh(
-                    self.gaussians.active_sh_degree, shs_view, dir_pp_normalized
-                )
-                colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
-            else:
-                shs = self.gaussians.get_features
-        else:
-            colors_precomp = override_color
+        # if colors_precomp is None:
+        #     if convert_SHs_python:
+        #         shs_view = self.gaussians.get_features.transpose(1, 2).view(
+        #             -1, 3, (self.gaussians.max_sh_degree + 1) ** 2
+        #         )
+        #         dir_pp = self.gaussians.get_xyz - viewpoint_camera.camera_center.repeat(
+        #             self.gaussians.get_features.shape[0], 1
+        #         )
+        #         dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+        #         sh2rgb = eval_sh(
+        #             self.gaussians.active_sh_degree, shs_view, dir_pp_normalized
+        #         )
+        #         colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+        #     else:
+        shs = self.gaussians.get_features
+        # else:
+        #     colors_precomp = override_color
+            
+        
 
         # Rasterize visible Gaussians to image, obtain their radii (on screen).
         rendered_image, radii, rendered_depth, rendered_alpha = rasterizer(
@@ -809,9 +861,13 @@ class Renderer:
         )
 
         rendered_image = rendered_image.clamp(0, 1)
+        # import ipdb;ipdb.set_trace()
 
         # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
         # They will be excluded from value updates used in the splitting criteria.
+        # import ipdb;ipdb.set_trace()
+        # if True in (screenspace_points!=0):
+        #     import ipdb;ipdb.set_trace()
         return {
             "image": rendered_image,
             "depth": rendered_depth,

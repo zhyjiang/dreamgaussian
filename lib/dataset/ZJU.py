@@ -188,7 +188,7 @@ class ZJU(Dataset):
             K.append(self.camera_params[i]['Ks'][self.seqid[index]])
             fovx.append(2 * np.arctan2(1024, 2 * self.camera_params[i]['Ks'][self.seqid[index]][0, 0]))
             fovy.append(2 * np.arctan2(1024, 2 * self.camera_params[i]['Ks'][self.seqid[index]][1, 1]))
-              
+        # import ipdb;ipdb.set_trace()
         return {
             'vertices': np.array(v)[...,:3],
             'image': np.array(image_list),

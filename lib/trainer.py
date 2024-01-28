@@ -116,7 +116,7 @@ class Trainer:
         self.encoder = VertexTransformer(opt=self.opt,img_dim=img_emb_dim,pose_num=self.data_config.pose_num,device=self.device, H=self.data_config.H, W = self.data_config.W).to(self.device)
 
         # renderer
-        self.renderer = Renderer(sh_degree=self.opt.sh_degree)
+        self.renderer = Renderer(sh_degree=self.opt.sh_degree,opt=self.opt)
         self.gaussain_scale_factor = 1
 
         # input image
@@ -137,6 +137,7 @@ class Trainer:
         self.step = 0
         self.train_steps = 1  # steps per rendering loop
         self.eval_steps = 1
+
         # import ipdb;ipdb.set_trace()
         # self.dataset = ZJU(opt)
         if self.opt.dataset_type == 'ZJU':
@@ -177,7 +178,9 @@ class Trainer:
         self.reconstruct_loss = None
         self.reg_loss = None
         self.IOU_loss = None
-       
+        self.renderer.gaussians.max_radii2D = torch.zeros((self.opt.batch_size,self.opt.upsample*6890, 3)).to(self.device)
+        self.xyz_gradient_accum = torch.zeros((self.opt.batch_size,self.opt.upsample*6890, 1), device="cuda")
+        self.denom = torch.zeros((self.opt.batch_size,self.opt.upsample*6890, 1), device="cuda")
         
         if self.gui:
             dpg.create_context()
@@ -237,6 +240,56 @@ class Trainer:
             
         else:
             return self.opt.lr 
+        
+
+    
+
+    def prepare_train_opt(self):
+    
+        self.step = 0
+
+        # setup training
+        self.renderer.gaussians.training_setup(self.opt)
+        # do not do progressive sh-level
+        self.renderer.gaussians.active_sh_degree = self.renderer.gaussians.max_sh_degree
+        self.optimizer = self.renderer.gaussians.optimizer
+
+        # default camera
+        if self.opt.mvdream or self.opt.imagedream:
+            # the second view is the front view for mvdream/imagedream.
+            pose = orbit_camera(self.opt.elevation, 90, self.opt.radius)
+        else:
+            pose = orbit_camera(self.opt.elevation, 0, self.opt.radius)
+        self.fixed_cam = MiniCam(
+            pose,
+            self.opt.ref_size,
+            self.opt.ref_size,
+            self.cam.fovy,
+            self.cam.fovx,
+            self.cam.near,
+            self.cam.far,
+        )
+
+        self.enable_sd = self.opt.lambda_sd > 0 and self.prompt != ""
+        self.enable_zero123 = self.opt.lambda_zero123 > 0 and self.input_img is not None
+
+        # lazy load guidance model
+        
+
+        
+
+        # input image
+        if self.input_img is not None:
+            self.input_img_torch = torch.from_numpy(self.input_img).permute(2, 0, 1).unsqueeze(0).to(self.device)
+            self.input_img_torch = F.interpolate(self.input_img_torch, (self.opt.ref_size, self.opt.ref_size), mode="bilinear", align_corners=False)
+
+            self.input_mask_torch = torch.from_numpy(self.input_mask).permute(2, 0, 1).unsqueeze(0).to(self.device)
+            self.input_mask_torch = F.interpolate(self.input_mask_torch, (self.opt.ref_size, self.opt.ref_size), mode="bilinear", align_corners=False)
+
+        # prepare embeddings
+       
+       
+                
     def prepare_train(self):
 
         self.step = 0
@@ -276,7 +329,7 @@ class Trainer:
         # self.IOU_loss = torch.nn.BCELoss() + DICELoss()
         
             
-
+        
         # setup training
         # self.renderer.gaussians.training_setup(self.opt)
         # do not do progressive sh-level
@@ -388,8 +441,7 @@ class Trainer:
                     
                         pose = smpl_params['poses'].float().to(self.device)
                         shape = smpl_params['shapes'].float().to(self.device)
-                        trans = smpl_params['Th'].float().to(self.device)
-                        rot = smpl_params['Rh'].float().to(self.device)   
+                       
                     
                     if self.opt.param_input:
                         means3D, opacity, scales, shs, rotations = self.encoder((pose,shape),img=gt_images,cam = full_proj_cam_list)
@@ -397,6 +449,9 @@ class Trainer:
                         means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=gt_images,cam = cam_list)
                     if self.encoder.upsample != 1:
                         vertices = vertices.repeat( 1,self.encoder.upsample, 1)
+                    # if ep == 0: 
+                    #     scales = scales * self.opt.scale_factor
+                    # else;
                     scales = scales * self.opt.scale_factor
                     
                     # for idx in range(len(vertices)):
@@ -453,7 +508,7 @@ class Trainer:
                         
                         psnr_l_normed.append(self.psnr_metric(pred_img_norm, gt_img_norm))
   
-                        ssim_l.append(skimage.metrics.structural_similarity( gt_img_norm,pred_img_norm, multichannel=True,channel_axis=-1,data_range=1.0))   
+                        ssim_l.append(skimage.metrics.structural_similarity( target_img,np_img, multichannel=True,channel_axis=-1,data_range=1.0))   
 
                 if self.lpips is not None:
                     self.lpips.eval()
@@ -476,6 +531,9 @@ class Trainer:
         world_vertex = {}
         for epoch in range(self.train_steps):
             
+            
+            psnr_train = []
+            ssim_train = []
             os.makedirs(self.opt.vis_path,exist_ok=True)
             os.makedirs(self.opt.vis_depth_path,exist_ok=True)
             os.makedirs(self.opt.vis_second_view,exist_ok=True)
@@ -500,8 +558,7 @@ class Trainer:
                     smpl_params = data['smpl_param']
                     pose = smpl_params['poses'].float().to(self.device)
                     shape = smpl_params['shapes'].float().to(self.device)
-                    trans = smpl_params['Th'].float().to(self.device)
-                    rot = smpl_params['Rh'].float().to(self.device)  
+                     
 
                 gt_images = data['image'].float().to(self.device).view((-1,3,self.H,self.W))
                 
@@ -550,6 +607,9 @@ class Trainer:
                     
                 if self.encoder.upsample != 1:
                     vertices = vertices.repeat( 1,self.encoder.upsample, 1)
+                    
+                # import ipdb;ipdb.set_trace()
+                    
                 scales = scales * self.opt.scale_factor
                 for idx in range(self.opt.multi_view):
                     cam = MiniCam(
@@ -601,10 +661,21 @@ class Trainer:
                     if self.reconstruct_loss is not None:
                         # loss = loss + self.reconstruct_loss(image * mask[idx:idx+1, None,:, :], gt_images[idx:idx+1])
                         loss = loss + self.reconstruct_loss(image, gt_images[idx])
-
+                        
+                   
+                        # max_radii = radii[visibility_filter]
+                        # self.renderer.gaussians.max_radii2D[visibility_filter] = torch.max(self.renderer.gaussians.max_radii2D[idx][visibility_filter], radii[visibility_filter])
+                        # self.renderer.gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                        # gradient = torch.norm(viewspace_point_tensor.grad[visibility_filter,:2], dim=-1, keepdim=True)     
+                        # if ep % self.opt.densification_interval == 0:
+                        #     values = self.renderer.gaussians.densify_and_prune(self.opt.densify_grad_threshold,min_opacity=0.01, extent=4, max_screen_size=1,values=values,grads=gradient)
+                                
+                  
+                    
                     if iter % 100 == 0 :
                         np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
+                        
                         depth_img = depth.detach().cpu().numpy()
 
                         # proj = (cam_list[idx] @ vertices[idx].T).T
@@ -615,13 +686,21 @@ class Trainer:
                         cv2.imwrite(os.path.join(self.opt.vis_path,f'{iter}_view{idx}.jpg'), np.concatenate((target_img, np_img), axis=1)*255.0)
                         plt.imsave(os.path.join(self.opt.vis_depth_path,f'{iter}_view{idx}.jpg'), depth_img)
                         
+                        
+                        psnr_train.append(self.psnr_metric(np_img,target_img))
+                        ssim_train.append(skimage.metrics.structural_similarity( target_img,np_img, multichannel=True,channel_axis=-1,data_range=1.0))   
+                        
+                        
                     # if iter %100 ==  0:
                         
-                    #     if self.opt.multi_view > 1:
+                        # if self.opt.multi_view > 1:
                            
-                    #         self.save_ply(self.opt.vis_ply_path, vertices[idx]+means3D[0],opacity[0],scales[0],rotations[0],shs[0],iter)
-                    #     else:
-                    #         self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[idx],opacity[idx],scales[idx],rotations[idx],shs[idx],iter)
+                        #     # self.save_ply(self.opt.vis_ply_path, vertices[idx]+means3D[0],opacity[0],scales[0],rotations[0],shs[0],iter)
+                        # else:
+                        
+                    if ep % 25 == 0 and ep!=0:
+                        np.savez(os.path.join(self.opt.vis_path,f'scales_{iter}.npz'),scale=scales.detach().cpu().numpy(),vertex=(vertices[idx]+means3D[0]).detach().cpu().numpy(),color=shs.detach().cpu().numpy(),rotation=rotations.detach().cpu().numpy(),alpha=opacity.detach().cpu().numpy(),gt_images=gt_images.detach().cpu().numpy())
+                            # self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[idx],opacity[idx],scales[idx],rotations[idx],shs[idx],iter)
 
                     # if iter % 100 ==0:
                     #     with torch.no_grad():
@@ -641,7 +720,7 @@ class Trainer:
                             bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
 
                             if self.opt.multi_view > 1:
-                                out = self.renderer.render(cam,
+                                output = self.renderer.render(cam,
                                                         vertices[idx] + means3D[0],
                                                         opacity[0],
                                                         scales[0],
@@ -649,7 +728,7 @@ class Trainer:
                                                         rotations[0],
                                                         bg_color=bg_color)
                             else:    
-                                out = self.renderer.render(cam,
+                                output = self.renderer.render(cam,
                                                         vertices[idx] + means3D[idx],
                                                         opacity[idx],
                                                         scales[idx],
@@ -658,8 +737,8 @@ class Trainer:
                                                         bg_color=bg_color)
                             
                         
-                            image = out["image"] # [1, 3, H, W] in [0, 1]
-                            depth = out['depth'].squeeze() # [H, W]
+                            image = output["image"] # [1, 3, H, W] in [0, 1]
+                            depth = output['depth'].squeeze() # [H, W]
                             
                             image_mask = image.clone()
                             image_mask[image_mask>0] = 1
@@ -670,7 +749,17 @@ class Trainer:
                         
                             if iter % 100 ==0:
                                 cv2.imwrite(f'{self.opt.vis_second_view}/{iter}_view{j}.jpg', np.concatenate((target, np_img), axis=1) * 255)
-                        
+
+                            # import ipdb;ipdb.set_trace()
+                            
+                                # if ep % self.opt.opacity_reset_interval == 0:
+                                #     self.renderer.gaussians.reset_opacity()
+                       
+                        # if ep % self.opt.densification_interval == 0:
+                        #     values = self.renderer.gaussians.densify_and_prune(self.opt.densify_grad_threshold,min_opacity=0.01, extent=4, max_screen_size=1,values=values,grads=gradient)
+                                
+                                    
+                                    
                 pbar.set_postfix({'Loss': f'{loss.item():.5f}', 
                                   'DB': f'{scales.mean().item():.5f}'})
               
@@ -679,11 +768,32 @@ class Trainer:
                 loss.backward()
                 overall_loss+=loss.item()
                 self.optimizer.step()
-                self.writer.add_scalar('Train/Loss', loss.item()/len(data['w2c']), global_step=ep*len(self.dataloader)+iter)   
-              
+                self.writer.add_scalar('Train/Loss', loss.item()/len(data['w2c']), global_step=ep*len(self.dataloader)+iter)  
+                
+                
+                
+                # self.3DGS((means3D, opacity, scales, shs, rotations ))
+                # if not torch.all(out["radii"]==out["radii"][0]) and ep >=2:
+                #     import ipdb;ipdb.set_trace()
+                
+                # if ep >= self.opt.density_start_iter and ep <= self.opt.density_end_iter and iter != 0:
+                #     viewspace_point_tensor, visibility_filter, radii = out["viewspace_points"], out["visibility_filter"], out["radii"]
+                #     # if viewspace_point_tensor.grad is None:
+                #         # viewspace_point_tensor.grad = torch.
+                   
+                #     import ipdb; ipdb.set_trace()
+                #     values = (vertices[idx]+means3D[idx], opacity[idx], scales[idx], shs[idx], rotations[idx])
+                #     gradient = torch.norm(viewspace_point_tensor.grad[visibility_filter,:2], dim=-1, keepdim=True)  
+                #     if ep % self.opt.densification_interval == 0:
+                #         values = self.renderer.gaussians.densify_and_prune(self.opt.densify_grad_threshold,min_opacity=0.01, extent=4, max_screen_size=1,values=values,grads=gradient,radii=radii)   
+                            
+                             
+            self.writer.add_scalar('Train/psnr Epoch', np.array(psnr_train).mean(),global_step=ep)
+            self.writer.add_scalar('Train/ssim Epoch', np.array(ssim_train).mean(),global_step=ep)
             self.opt.smpl_reg_scale *= 0.9
             self.scheduler.step()
             self.writer.add_scalar('Train/Loss Epoch', overall_loss/(len(self.dataloader)*len(data['w2c'])), global_step=ep) 
+            
                 
 
         ender.record()
@@ -1317,6 +1427,7 @@ class Trainer:
             # update texture every frame
             if self.training:
                 self.train_step()
+                
             self.test_step()
             
             
@@ -1328,8 +1439,15 @@ class Trainer:
     def train(self, iters=500):
         if iters > 0:
             self.prepare_train()
+            # prepare_train_3DGS()
+            
+            # if self.post_3DGS:
+               
+            #     self.prepare_train_opt()
             for i in tqdm.trange(iters):
-                self.train_step(i)
+                values = self.train_step(i)
+                # if self.opt.post_3DGS:
+                #     train_step_3DGS(i,values)
                 
                 
                 if i % self.opt.eval_interval == 0:
