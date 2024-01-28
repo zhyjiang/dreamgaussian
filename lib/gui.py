@@ -109,7 +109,7 @@ class GUI:
         self.step = 0
 
         # setup training
-        self.renderer.gaussians.training_setup(self.opt)
+        # self.renderer.gaussians.training_setup(self.opt)
         # do not do progressive sh-level
         self.renderer.gaussians.active_sh_degree = self.renderer.gaussians.max_sh_degree
         self.optimizer = self.renderer.gaussians.optimizer
