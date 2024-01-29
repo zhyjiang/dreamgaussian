@@ -337,6 +337,10 @@ class GaussianModel:
         data = np.load(values)
         
         shs = torch.tensor(data['color'][0]).cuda().float()
+        temp = shs[:,0:1].clone()
+       
+        shs[:,0:1] = shs[:,2:3] 
+        shs[:,2:3] = temp
         rotations = torch.tensor(data['rotation'][0]).cuda().float()
         scales = self.scaling_inverse_activation(torch.tensor(data['scale'][0]).cuda()).float()
         means3D = torch.tensor(data['vertex']).cuda().float()
