@@ -151,7 +151,7 @@ class GUI:
             100,
         )
         
-        extra_cam_info = np.load('camera.npz')
+        extra_cam_info = np.load(self.opt.cam)
         self.extra_cam = []
         # import ipdb;ipdb.set_trace()
         for i in range(1,14):
@@ -262,19 +262,22 @@ class GUI:
                 #     image = image.permute(0, 2, 3, 1).contiguous().detach().cpu().numpy()[0]
                 #     cv2.imwrite(save_path, image[..., ::-1] * 255)
                 # import ipdb;ipdb.set_trace()
-                # loss = loss +  10000*F.mse_loss(temp, temp_target)
+               
                 # loss = loss +  10000*F.mse_loss(image, self.input_img_torch.float())
                 temp = image * mask[0,0][None,None,:]
                 temp_target = self.input_img_torch.float() * self.input_mask_torch[0,0][None,None,:]
+                # loss = loss +  10000*F.mse_loss(temp, temp_target)
+                # Ll1 = l1_loss(image, gt_image)
+                # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
                 
                 loss = loss +  10000*F.mse_loss(temp[temp_target>0], temp_target[temp_target>0])
                 # mask loss
                 # [1, 1, H, W] in [0, 1]
                 # import ipdb;ipdb.set_trace()
                 # loss = loss + 1000 * (step_ratio if self.opt.warmup_rgb_loss else 1) * F.mse_loss(mask, self.input_mask_torch)
-                loss = loss + 10000* F.mse_loss(mask, self.input_mask_torch.float())
+                loss = loss + 100* F.mse_loss(mask, self.input_mask_torch.float())
                 # import ipdb;ipdb.set_trace()
-                if self.step % 100 == 0 or self.step == 1:
+                if self.step % 500 == 0 or self.step == 1:
                     save_path = os.path.join(self.opt.outdir, self.opt.save_path + f'{self.step}_rgb_view0.png')
                     # import ipdb;ipdb.set_trace()
                     image = image.permute(0, 2, 3, 1).contiguous().detach().cpu().numpy()[0]
@@ -317,9 +320,9 @@ class GUI:
                     # mask loss
                      # [1, 1, H, W] in [0, 1]
                     
-                        loss = loss +  10000*F.mse_loss(extra_mask, self.extra_mask[view].float())
+                        loss = loss + 100*F.mse_loss(extra_mask, self.extra_mask[view].float())
                     
-                    if self.step % 100 == 0 or self.step == 1:
+                    if self.step % 500 == 0 or self.step == 1:
                     
                         save_path = os.path.join(self.opt.outdir, self.opt.save_path + f'{self.step}_rgb_view_{view+1}.png')
                         # import ipdb;ipdb.set_trace()
@@ -518,7 +521,7 @@ class GUI:
 
         # img = cv2.resize(img, (self.W, self.H), interpolation=cv2.INTER_AREA)
         
-        all_img = np.load('/home/zhongyuj/dreamgaussian/temp_ZJU_temp/scales_0.npz')['gt_images']
+        all_img = np.load(self.opt.load)['gt_images']
         
         # import ipdb;ipdb.set_trace()
         img = np.transpose(all_img[0],(1,2,0)).astype(np.float32)
@@ -562,7 +565,7 @@ class GUI:
         #         self.prompt = f.read().strip()
 
     @torch.no_grad()
-    def save_model(self, mode='geo', texture_size=1024):
+    def save_model(self, mode='geo', texture_size=1024,epoch='last'):
         os.makedirs(self.opt.outdir, exist_ok=True)
         if mode == 'geo':
             path = os.path.join(self.opt.outdir, self.opt.save_path + '_mesh.ply')
@@ -698,7 +701,7 @@ class GUI:
             mesh.write(path)
 
         else:
-            path = os.path.join(self.opt.outdir, self.opt.save_path + '_model.ply')
+            path = os.path.join(self.opt.outdir, self.opt.save_path + f'{epoch}_model.ply')
             self.renderer.gaussians.save_ply(path)
             
 
@@ -1052,11 +1055,14 @@ class GUI:
             self.prepare_train()
             for i in tqdm.trange(iters):
                 self.train_step()
+                
+                if i % 500 == 0:
+                    self.save_model(mode='model',epoch=i)
             # do a last prune
             self.renderer.gaussians.prune(min_opacity=0.01, extent=1, max_screen_size=1)
         # save
+        
         self.save_model(mode='model')
-        # self.save_model(mode='geo+tex')
         
 
 if __name__ == "__main__":

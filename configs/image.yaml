@@ -30,7 +30,7 @@ lambda_zero123: 1
 # training batch size per iter
 batch_size: 1
 # training iterations for stage 1
-iters: 5000
+iters: 1000
 # whether to linearly anneal timestep
 anneal_timestep: True
 # training iterations for stage 2
@@ -41,6 +41,7 @@ radius: 2
 fovy: 49.1 # align with zero123 rendering setting (ref: https://github.com/cvlab-columbia/zero123/blob/main/objaverse-rendering/scripts/blender_script.py#L61
 # checkpoint to load for stage 1 (should be a ply file)
 load: /home/zhongyuj/dreamgaussian/temp_ZJU_temp/scales_0.npz 
+cam: cam_info.npz
 
 # whether allow geom training in stage 2
 train_geo: False
@@ -73,7 +74,7 @@ density_start_iter: 100
 density_end_iter: 3000
 densification_interval: 100
 opacity_reset_interval: 700
-densify_grad_threshold: 0.01
+densify_grad_threshold: 0.005
 
 ### Textured Mesh
 geom_lr: 0.0001
