@@ -524,7 +524,7 @@ class GUI:
         all_img = np.load(self.opt.load)['gt_images']
         
         # import ipdb;ipdb.set_trace()
-        img = np.transpose(all_img[0],(1,2,0)).astype(np.float32)
+        img = np.transpose(all_img[0][::-1],(1,2,0)).astype(np.float32)
         # img = img.astype(np.float32) / 255.0
 
         # import ipdb;ipdb.set_trace()
@@ -540,7 +540,7 @@ class GUI:
         self.extra_mask = []
         for i in range(1,len(all_img)):
             # temp_img = cv2.imread(extra_file[i], cv2.IMREAD_UNCHANGED)
-            temp_img = all_img[i]
+            temp_img = all_img[i][::-1]
             temp_img = np.transpose(temp_img,(1,2,0)).astype(np.float32)
             # if temp_img.shape[-1] == 3:
             #     if self.bg_remover is None:
