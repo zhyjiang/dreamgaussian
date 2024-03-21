@@ -9,17 +9,17 @@ import dearpygui.dearpygui as dpg
 from plyfile import PlyData, PlyElement
 import torch
 import torch.nn.functional as F
+from transformers import ViTImageProcessor, ViTModel, ViTConfig
+from sh_utils import eval_sh, SH2RGB, RGB2SH
 
 import rembg
 
-from cam_utils import orbit_camera, OrbitCamera
-from lib.gs.gs_renderer import Renderer, MiniCam,Camera
+from lib.gs.gs_renderer import Renderer,Camera
 from kornia.losses.ssim import SSIMLoss, ssim_loss
 
+
 from grid_put import mipmap_linear_grid_put_2d
-from mesh import Mesh, safe_normalize
-from lib.model.vertex_encoder import VertexTransformer
-from lib.model.vertex_encoder2 import VertexTransformer2
+from lib.model.UV_GS import UV_GS
 from lib.dataset.ZJU import ZJU
 from lib.dataset.HuMMan import HuMManDatasetBatch
 from torch.optim.lr_scheduler import LambdaLR
@@ -50,7 +50,26 @@ class IoULoss(torch.nn.Module):
         loss = 1.0 - iou
 
         return loss
+def cosine_similarity(features,nearest_point,vts):
+    part_weight = np.load('part_weight.npy')
+    k = nearest_point.shape[1]
+    k_features = features[vts[nearest_point][:,:,0],vts[nearest_point][:,:,1]] # 7670, 5, d
+    cur_features = features[vts[:,0],vts[:,1]].unsqueeze(1) # 7670, 1, d
+    # import ipdb;ipdb.set_trace()
+   
+    # import ipdb;ipdb.set_trace()
     
+    l = torch.sum(F.cosine_similarity(cur_features,k_features,dim=2)* torch.tensor(part_weight).to(features.device)) # 7670 5
+    return l
+def features_diff(features,nearest_point,vts):
+    # import ipdb;ipdb.set_trace()
+    k = nearest_point.shape[1]
+    k_features = features[vts[nearest_point][:,:,0],vts[nearest_point][:,:,1]] # 7670, 5, d
+    cur_features = features[vts[:,0],vts[:,1]].unsqueeze(1) # 7670, 1, d
+    # import ipdb;ipdb.set_trace()
+    cur_features = cur_features.repeat((1,k,1))
+    l = torch.sum(torch.norm((cur_features-k_features),dim=2)) # 7670 5
+    return l
 def gaussian(window_size, sigma):
         gauss = torch.Tensor([exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
         return gauss / gauss.sum()
@@ -72,6 +91,7 @@ def ssim(img1, img2, window_size=11, size_average=True):
     return _ssim(img1, img2, window, window_size, channel, size_average)
 
 def _ssim(img1, img2, window, window_size, channel, size_average=True):
+    # import ipdb;ipdb.set_trace()
     mu1 = F.conv2d(img1, window, padding=window_size // 2, groups=channel)
     mu2 = F.conv2d(img2, window, padding=window_size // 2, groups=channel)
 
@@ -95,7 +115,7 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
                 
 
 class LPIPS(torch.nn.Module):
-    r"""Creates a criterion that measures
+    r"""Creates a criteion that measures
     Learned Perceptual Image Patch Similarity (LPIPS).
 
     Arguments:
@@ -137,13 +157,14 @@ class Trainer:
         self.lpips = LPIPS()
         # else:
         #     self.lpips = None
+        
         self.W = self.data_config.W
         self.H = self.data_config.H
         self.near = opt.near
         self.far = opt.far
         self.pretrain_path = opt.pretrain_path
         os.makedirs(os.path.join('logs',self.opt.save_name),exist_ok=True)
-        self.writer = SummaryWriter(os.path.join('logs',self.opt.save_name))
+        self.write = SummaryWriter(os.path.join('logs',self.opt.save_name))
         self.mode = "image"
         self.seed = "random"
 
@@ -152,20 +173,20 @@ class Trainer:
 
         # models
         self.device = torch.device("cuda")
-        # self.bg_remover = None
-
-        # self.guidance_sd = None
-        # self.guidance_zero123 = None
-
-        # self.enable_sd = False
-        # self.enable_zero123 = False
-        img_emb_dim = self.data_config.img_emb_dim
+        self.nearest_point = torch.tensor(np.load('nearest_point.npy')).to(self.device)
+        self.dimension = 3
+        self.model = UV_GS(self.opt).to(self.device)
         
-        self.encoder = VertexTransformer2(opt=self.opt,img_dim=img_emb_dim,pose_num=self.data_config.pose_num,device=self.device, H=self.data_config.H, W = self.data_config.W).to(self.device)
+            
+
+
+            
         
+
+            
+
         if self.pretrain_path is not None:
-            # import ipdb;ipdb.set_trace()
-            self.encoder.load_state_dict(torch.load(self.pretrain_path))
+            self.model.load_state_dict(torch.load(self.pretrain_path))
             print(f'Loaded pretrained model from {self.pretrain_path}')
 
         # renderer
@@ -191,13 +212,9 @@ class Trainer:
         self.train_steps = 1  # steps per rendering loop
         self.eval_steps = 1
 
-        # import ipdb;ipdb.set_trace()
-        # self.dataset = ZJU(opt)
         if self.opt.dataset_type == 'ZJU':
             self.dataset = ZJU(opt,'train')
             self.test_dataset = ZJU(opt,'test')
-            # self.dataset = new_zju(opt,'train')
-            # self.test_dataset = zju_new(opt,'test')
             self.dataloader = torch.utils.data.DataLoader(self.dataset, 
                                                       batch_size=opt.batch_size, 
                                                       shuffle=True, 
@@ -209,14 +226,9 @@ class Trainer:
                                                       num_workers=opt.dataset.num_workers)
             
         elif self.opt.dataset_type == 'HuMMan':
-            # import ipdb;ipdb.set_trace()
-            
-        
-        
             self.dataset2 = HuMManDatasetBatch(data_root=self.opt.dataset2.root,split='train')
             
             self.test_dataset2 = HuMManDatasetBatch(data_root=self.opt.dataset2.root,split='train')
-            # self.test_dataset = ZJU(opt,'test')
             self.dataloader = torch.utils.data.DataLoader(self.dataset2, 
                                                         batch_size=opt.batch_size, 
                                                         shuffle=True, 
@@ -336,11 +348,12 @@ class Trainer:
     def prepare_train(self):
 
         self.step = 0
+        
 
-        self.optimizer = torch.optim.Adam(self.encoder.parameters(), lr=1.0)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1.0)
         self.scheduler = LambdaLR(self.optimizer, lr_lambda=self.lr_lambda)
         
-        self.encoder.to(self.device)
+        # self.model.to(self.device)
         
         
         
@@ -369,6 +382,9 @@ class Trainer:
             
             
         self.ssim_loss = ssim
+        self.smooth_loss = cosine_similarity
+        # self.smooth_loss = features_diff
+        self.feature_loss = torch.nn.MSELoss()
         # self.IOU_loss = IoULoss()
      
      
@@ -384,7 +400,8 @@ class Trainer:
         
         
         with torch.no_grad():
-            self.encoder.eval()
+            self.model.eval()
+            # self.uv_model.eval()
         
             
             for epoch in range(self.eval_steps):
@@ -393,10 +410,10 @@ class Trainer:
                 lpips_res= [] 
                 
                 pbar = tqdm.tqdm(self.testloader)
-                for iter, data in enumerate(pbar):
+                for ite, data in enumerate(pbar):
                     vertices = data['vertices'].float().to(self.device)
                     
-                    gt_images = data['image'].view((-1,3,self.H,self.W)).float().to(self.device)
+                    gt_images = data['image'].view((-1,self.H,self.W,3)).float().to(self.device)
                     # mask = data['mask'].view((-1,self.H,self.W)).float().to(self.device)
                     
                     
@@ -418,24 +435,21 @@ class Trainer:
                         temp_gt_images = gt_images[0].unsqueeze(0)
                     else:
                         temp_gt_images = gt_images[[x-1 for x in self.opt.dataset.test_camera_list]]
+                        
                     
                     if self.opt.param_input:
-                        means3D, opacity, scales, shs, rotations = self.encoder((pose,shape),img=temp_gt_images,cam = None)
+                        means3D, opacity, scales, shs, rotations,features = self.model((pose,shape),img=temp_gt_images,cam = None)
                     else:
-                        means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=temp_gt_images,cam = None)
-                    if self.encoder.upsample != 1:
-                        vertices = vertices.repeat( 1,self.encoder.upsample, 1)
+                        means3D, opacity, scales, shs, rotations,features = self.model(vertices,img=temp_gt_images,cam = None)
+                    if self.opt.upsample != 1:
+                        vertices = vertices.repeat( 1,self.opt.upsample, 1)
                   
-                    # scales = scales * (-5)
-                    # scales = scales * self.opt.scale_factor
-                    # import ipdb;ipdb.set_trace()
                     if self.opt.learned_scale:
-                    #     # scales = scales * torch.clamp(self.encoder.ln_scale_weight,0.0001,1)*self.opt.learned_scale_weight
-                        scales = scales * self.encoder.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
-                        # scales = scales * torch.clamp(self.encoder.ln_scale_weight,0.0001,10)
-                    # scales = scales * torch.clamp(self.encoder.ln_scale_weight,0.001,0.1)
+                        scales = scales * self.model.model.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
 
-                    if iter == 0:
+                    # scales *= 0.01
+                    scales = scales*self.opt.scale_factor
+                    if ite == 0:
                         plt.hist(scales[...,0].flatten().detach().cpu().numpy(),bins=10)
                         plt.savefig(f'{self.opt.vis_ply_path}/scale_0.png')
                         plt.close()
@@ -446,11 +460,6 @@ class Trainer:
                         plt.hist(scales[...,2].flatten().detach().cpu().numpy(),bins=10)
                         plt.savefig(f'{self.opt.vis_ply_path}/scale_2.png')
                         plt.close()
-
-                    
-                    # scales = scales * torch.clamp(self.encoder.ln_scale_weight,-10,-1)
-                    
-                    # scales = torch.clamp(scales * torch.rand_like(scales),min=0.00001,max=0.1)
                     
 
                     for i in self.opt.dataset.test_camera_list:
@@ -466,7 +475,7 @@ class Trainer:
                         )
                         bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
                         out = self.renderer.render(cam,
-                                                    vertices[idx]+means3D[0],
+                                                vertices[idx]+means3D[0],
                                                 opacity[0],
                                                 scales[0],
                                                 shs[0][:, None, :],
@@ -480,22 +489,39 @@ class Trainer:
                         np_img = np_img.transpose(1, 2, 0)
                         
                         target_img = gt_images[idx].cpu().numpy()
-                        target_img = target_img.transpose(1, 2, 0)
+                        # target_img = target_img.transpose(1, 2, 0)
 
                         # depth_img = depth.detach().cpu().numpy()
-                        #     cv2.imwrite(f'./vis_temp/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
-                        # plt.imsave(os.path.join(self.opt.vis_eval_depth_path,f'{iter}.jpg'), depth_img)
-                        # cv2.imwrite(os.path.join(self.opt.vis_eval,f'{iter}.jpg'), np.concatenate((target_img, np_img), axis=1) * 255)
-                        cv2.imwrite(f'{self.opt.vis_second_view}/{iter}_view{idx}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
-                        
+                        #     cv2.imwrite(f'./vis_temp/{ite}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
+                        # plt.imsave(os.path.join(self.opt.vis_eval_depth_path,f'{ite}.jpg'), depth_img)
+                        # cv2.imwrite(os.path.join(self.opt.vis_eval,f'{ite}.jpg'), np.concatenate((target_img, np_img), axis=1) * 255)
+                        cv2.imwrite(f'{self.opt.vis_second_view}/{ite}_view{idx}.jpg', np.concatenate((target_img[...,::-1], np_img[...,::-1]), axis=1) * 255)
                         psnr_l.append(self.psnr_metric(np_img, target_img))
                         ssim_l.append(skimage.metrics.structural_similarity( target_img,np_img, multichannel=True,channel_axis=-1,data_range=1.0))  
-                        if self.lpips is not None and (i == self.opt.dataset.test_camera_list[0] or i == self.opt.dataset.test_camera_list[-1]):
+                        if self.lpips is not None and (i in self.opt.dataset.test_camera_list[:]):
                             self.lpips.eval()
                             lpips_res.append(self.lpips(torch.tensor(np_img).permute(2,0,1), torch.tensor(target_img).permute(2,0,1)).item()) 
+                            
+                        with torch.no_grad(): 
+                            # if i == self.opt.dataset.train_camera_list[0]:
+                            shs_view = shs.detach().view(
+                                -1, 3, (0 + 1) ** 2
+                            )
+                            dir_pp = means3D - cam.camera_center.repeat(
+                                shs.shape[0], 1
+                            )
+                            dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+                            sh2rgb = eval_sh(
+                                0, shs_view, dir_pp_normalized
+                            )
+                            
+                            colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+                            uv_map = torch.zeros_like(gt_images[idx])
+                            self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='p')
                 print('psnr_eval', np.array(psnr_l).mean())  
                 print('ssim_eval', np.array(ssim_l).mean()) 
-                print('lpips_eval',np.array(lpips_res).mean())     
+                print('lpips_eval',np.array(lpips_res).mean())    
+                self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[0],opacity[0],scales[0],rotations[0],shs[0],ite) 
                 import ipdb;ipdb.set_trace()
     def eval(self,ep):
         os.makedirs(self.opt.vis_path,exist_ok=True)
@@ -504,7 +530,8 @@ class Trainer:
         
         
         with torch.no_grad():
-            self.encoder.eval()
+            # self.model.eval()
+            self.model.eval()
         
             
             for epoch in range(self.eval_steps):
@@ -516,12 +543,9 @@ class Trainer:
                 gt_imgs = []
                 
                 pbar = tqdm.tqdm(self.testloader)
-                for iter, data in enumerate(pbar):
+                for ite, data in enumerate(pbar):
                     vertices = data['vertices'].float().to(self.device)
-                    
-                    gt_images = data['image'].view((-1,3,self.H,self.W)).float().to(self.device)
-                    # mask = data['mask'].view((-1,self.H,self.W)).float().to(self.device)
-                    
+                    gt_images = data['image'].view((-1,self.H,self.W,3)).float().to(self.device)
                     vertices = vertices.view((-1,6890,3))
                     data['fovy'] = data['fovy'].view((-1))
                     data['fovx'] = data['fovx'].view((-1))
@@ -537,27 +561,15 @@ class Trainer:
                     
                     if self.opt.multi_view == 1 and len(gt_images.shape) ==4  :
                         temp_gt_images = gt_images[0].unsqueeze(0)
-                    else:
-
-                        temp_gt_images = gt_images[[x-1 for x in self.opt.dataset.test_camera_list]]
-                    
-                    if self.opt.param_input:
-                        means3D, opacity, scales, shs, rotations = self.encoder((pose,shape),img=temp_gt_images,cam = None)
-                    else:
-                        means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=temp_gt_images,cam = None)
-                    # import ipdb;ipdb.set_trace()
-                    
-                    if self.opt.late_can2w:
-                        # import ipdb;ipdb.set_trace()
-                    # Rh = torch.tensor(cv2.Rodrigues(np.array(data['smpl_param']['Rh']))[0]).unsqueeze(0).to(self.device)
-                        means3D = means3D.bmm(data['smpl_param']['Rh'].permute((0,2,1)).to(self.device)) + data['smpl_param']['Th'].to(self.device)
-                    if self.encoder.upsample != 1:
-                        vertices = vertices.repeat( 1,self.encoder.upsample, 1)
+                  
+                    means3D, opacity, scales, shs, rotations,features,features_all = self.model(pose,shape,temp_gt_images,cam=None)
+                    # scales = scales*0.01
+                    scales=scales*self.opt.scale_factor
+                
                     if self.opt.learned_scale:
-                        scales = scales * self.encoder.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
+                        scales = scales * self.model.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
                     
-                        # scales = scales * torch.clamp(self.encoder.ln_scale_weight,0.0001,1)*self.opt.learned_scale_weight
-                    if iter == 0:
+                    if ite == 0:
                         plt.hist(scales[...,0].flatten().detach().cpu().numpy(),bins=10)
                         # import ipdb;ipdb.set_trace()
                         plt.savefig(f'{self.opt.vis_ply_path}/scale_0.png')
@@ -571,8 +583,7 @@ class Trainer:
                         plt.savefig(f'{self.opt.vis_ply_path}/scale_2.png')
                         plt.close()
 
-                    # scales = scales * torch.clamp(self.encoder.ln_scale_weight,0.0001,0.01)
-                    # scales = scales * torch.clamp(self.encoder.ln_scale_weight,0.001,0.1)
+                
                     
                     for i in self.opt.dataset.test_camera_list:
                         idx = i-1
@@ -601,25 +612,17 @@ class Trainer:
                         np_img = np_img.transpose(1, 2, 0)
                         
                         target_img = gt_images[idx].cpu().numpy()
-                        target_img = target_img.transpose(1, 2, 0)
-
-                        # depth_img = depth.detach().cpu().numpy()
-                        #     cv2.imwrite(f'./vis_temp/{iter}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
-                        # plt.imsave(os.path.join(self.opt.vis_eval_depth_path,f'{iter}.jpg'), depth_img)
-                        # cv2.imwrite(os.path.join(self.opt.vis_eval,f'{iter}.jpg'), np.concatenate((target_img, np_img), axis=1) * 255)
-                        cv2.imwrite(f'{self.opt.vis_second_view}/{iter}_view{idx}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
-                        # import ipdb;ipdb.set_trace()
+                        cv2.imwrite(f'{self.opt.vis_second_view}/{ite}_view{idx}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
                         psnr_l.append(self.psnr_metric(np_img, target_img))
                         ssim_l.append(skimage.metrics.structural_similarity( target_img,np_img, multichannel=True,channel_axis=-1,data_range=1.0))   
 
-                        if self.lpips is not None and i == self.opt.dataset.test_camera_list[0]:
+                        if self.lpips is not None and i in self.opt.dataset.test_camera_list[:3]:
                             self.lpips.eval()
                             lpips_res.append(self.lpips(torch.tensor(np_img).permute(2,0,1), torch.tensor(target_img).permute(2,0,1)).item())
-                self.writer.add_scalar('psnr_eval', np.array(psnr_l).mean(),global_step=ep)        
-                # self.writer.add_scalar('psnr_normed_eval', np.array(psnr_l_normed).mean(),global_step=ep)
-                self.writer.add_scalar('ssim_eval', np.array(ssim_l).mean(),global_step=ep)
+                self.write.add_scalar('psnr_eval', np.array(psnr_l).mean(),global_step=ep)        
+                self.write.add_scalar('ssim_eval', np.array(ssim_l).mean(),global_step=ep)
                 if self.lpips is not None:
-                    self.writer.add_scalar('lpips_eval',np.array(lpips_res).mean(),global_step=ep)
+                    self.write.add_scalar('lpips_eval',np.array(lpips_res).mean(),global_step=ep)
 
     
     
@@ -639,7 +642,7 @@ class Trainer:
             os.makedirs(self.opt.vis_depth_path,exist_ok=True)
             os.makedirs(self.opt.vis_second_view,exist_ok=True)
             print(self.optimizer.param_groups[0]['lr'])
-            self.encoder.train()
+            self.model.train()
 
             self.step += 1
             step_ratio = min(1, self.step / self.opt.iters)
@@ -647,7 +650,7 @@ class Trainer:
           
             # update lr
             pbar = tqdm.tqdm(self.dataloader)
-            for iter, data in enumerate(pbar):
+            for ite, data in enumerate(pbar):
 
                 loss = 0
                 self.optimizer.zero_grad()
@@ -661,9 +664,8 @@ class Trainer:
                     smpl_params = data['smpl_param']
                     pose = smpl_params['poses'].float().to(self.device)
                     shape = smpl_params['shapes'].float().to(self.device)
-                     
 
-                gt_images = data['image'].float().to(self.device).view((-1,3,self.H,self.W))
+                gt_images = data['image'].float().to(self.device).view((-1,self.H,self.W,3))
                 
                 mask = data['mask'].float().to(self.device).view((-1,self.H,self.W))
                 bound_mask = data['bound_mask'].float().to(self.device).view((-1,self.H,self.W))
@@ -678,41 +680,19 @@ class Trainer:
                 data['fovx'] = data['fovx'].view((-1))
                 cam_list= [ ]
                 
-                
+                bs = data['image'].shape[0]
                 
                 if self.opt.multi_view == 1 and len(gt_images.shape) ==4  :
                     temp_gt_images = gt_images[0].unsqueeze(0)
-                else:
-                    temp_gt_images = gt_images[[x-1 for x in self.opt.dataset.train_camera_list]]
+                
+                
+                means3D, opacity, scales, shs, rotations,features,features_all = self.model(pose,shape,temp_gt_images,cam=None)
 
-                if self.opt.param_input:
-                    means3D, opacity, scales, shs, rotations = self.encoder((pose,shape),img=temp_gt_images,cam = None)
-                    # means3D, opacity, scales, shs, rotations = self.encoder((pose,shape),img=temp_gt_images,cam = None)
-                else:  
-                    means3D, opacity, scales, shs, rotations = self.encoder(vertices,img=temp_gt_images,cam = cam_list)
-                # import ipdb;ipdb.set_trace()
-                if self.opt.late_can2w:
-                    # import ipdb;ipdb.set_trace()
-                    # Rh = torch.tensor(cv2.Rodrigues(np.array(data['smpl_param']['Rh']))[0]).unsqueeze(0).to(self.device)
-                    try: 
-                        means3D = means3D.bmm(data['smpl_param']['Rh'].permute((0,2,1)).to(self.device)) + data['smpl_param']['Th'].to(self.device)
-                    except:
-                        import pdb;pdb.set_trace()
-                if self.encoder.upsample != 1:
-                    vertices = vertices.repeat( 1,self.encoder.upsample, 1)
-                    
+                scales  = scales * self.opt.scale_factor
                     
                 if self.opt.learned_scale:
-                    scales = scales * self.encoder.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
-                scales = scales * 0.01
-                # scales = scales * self.opt.scale_factor
-                    # scales = scales * torch.clamp(self.encoder.ln_scale_weight,0.0001,1)*self.opt.learned_scale_weight
-                # scales = scales * torch.clamp(self.encoder.ln_scale_weight,0.001,1)
-                # scales = scales * torch.clamp(self.encoder.ln_scale_weight,0.0001,1)
-                # scales = scales * self.opt.scale_factor
-                # scales = scales * torch.clamp(self.encoder.ln_scale_weight,-10,-1)
-                # scales = torch.clamp(scales * torch.rand_like(scales)*0.1,min=0.00001,max=0.1)
-                # for idx in range(0,len(self.data_config.camera_list)-1):
+                    scales = scales * self.model.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
+             
                 for i in self.opt.dataset.train_camera_list:  
 
                     idx = i-1
@@ -729,11 +709,10 @@ class Trainer:
                 
                     bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
                     
-                    self.encoder.train()
-                    # import ipdb;ipdb.set_trace()
+
                         
                     out = self.renderer.render(cam,
-                                                vertices[idx]+means3D[0],
+                                            vertices[idx]+means3D[0],
                                             opacity[0],
                                             scales[0],
                                             shs[0][:, None, :],
@@ -744,55 +723,51 @@ class Trainer:
                     image = out["image"] # [1, 3, H, W] in [0, 1]
                     msk = out['alpha']
                     depth = out['depth'].squeeze() # [H, W]
-
-                    loss = loss + self.reg_loss(means3D[0], torch.zeros_like(means3D[0])) * self.opt.smpl_reg_scale
+                    loss = loss + self.reg_loss(means3D[0], torch.zeros_like(means3D[0])) * 0.01
                     loss = loss + self.mask_loss(msk[0][bound_mask[idx]==1],mask[idx][bound_mask[idx]==1]) *0.1
-                    
-                    
                     # import ipdb;ipdb.set_trace()
+                    # loss = loss + (5.0-(self.smooth_loss(features,self.nearest_point,self.model.generator.vts) / self.nearest_point.shape[0]))* self.opt.similarity_score_weight
+
+                    
+                    loss = loss + self.reconstruct_loss(image.permute((1,2,0))[bound_mask[idx]==1,:], gt_images[idx][bound_mask[idx]==1,:])*1
+                    
                     x, y, w, h = cv2.boundingRect(bound_mask[idx].cpu().numpy().astype(np.uint8))
                     img_pred = image[:, y:y + h, x:x + w].unsqueeze(0)
-                    img_gt = gt_images[idx][:, y:y + h, x:x + w].unsqueeze(0)
+                    img_gt = gt_images[idx][ y:y + h, x:x + w,:].unsqueeze(0).permute((0,3,1,2))
+                    # import ipdb;ipdb.set_trace()
                     loss = loss + (1.0 - self.ssim_loss(img_pred,img_gt))*0.02
-                    # import ipdb;ipdb.set_trace()
-                    # loss = loss + torch.norm(torch.var(scales,dim=1)) * -10
-                  
-
-
-                    # import ipdb;ipdb.set_trace()
-                    if self.reconstruct_loss is not None:
-                        loss = loss + self.reconstruct_loss(image[:,bound_mask[idx]==1], gt_images[idx][:,bound_mask[idx]==1])*1
-                        
-                   
-                       
-                                
                   
                     
-                    if iter % 50 == 0 :
-                        # import ipdb;ipdb.set_trace()
+                    if ite % 50 == 0 :
                         np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
-                        target_img = gt_images[idx].cpu().numpy().transpose(1, 2, 0)
-                        
-                        depth_img = depth.detach().cpu().numpy()
-
-                        # proj = (cam_list[idx] @ vertices[idx].T).T
-                        # proj[:, :2] /= proj[:, 2:]
-                        # plt.imshow(target_img)
-                        # plt.scatter(data['vertices'].float()[...,0],data['vertices'].float()[...,1],c='r')
-
-                        cv2.imwrite(os.path.join(self.opt.vis_path,f'{iter}_view{idx}.jpg'), np.concatenate((target_img, np_img), axis=1)*255.0)
-                        plt.imsave(os.path.join(self.opt.vis_path,f'{iter}_bound_mask{idx}.jpg'), bound_mask[idx].detach().cpu().numpy())
-
-                        plt.imsave(os.path.join(self.opt.vis_depth_path,f'{iter}_view{idx}.jpg'), depth_img)
+                        target_img = gt_images[idx].cpu().numpy()
+                        cv2.imwrite(os.path.join(self.opt.vis_path,f'{ite}_view{idx}.jpg'), np.concatenate((target_img, np_img), axis=1)*255.0)
+                        plt.imsave(os.path.join(self.opt.vis_path,f'{ite}_bound_mask{idx}.jpg'), bound_mask[idx].detach().cpu().numpy()*255.0)
                         
                         
                     
                 
-                    if ep % 4 == 0 and iter%100 == 0:
-                        # np.savez(os.path.join(self.opt.vis_path,f'scales_{iter}.npz'),scale=scales.detach().cpu().numpy(),vertex=(vertices[idx]+means3D[0]).detach().cpu().numpy(),color=shs.detach().cpu().numpy(),rotation=rotations.detach().cpu().numpy(),alpha=opacity.detach().cpu().numpy(),gt_images=gt_images.detach().cpu().numpy(),mask=mask.detach().cpu().numpy(),image_path=image_name)
-                        self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[0],opacity[0],scales[0],rotations[0],shs[0],iter)
+                    if ep % 10 == 0 and ite%100 == 0:
+                        with torch.no_grad():
+                            self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[0],opacity[0],scales[0],rotations[0],shs[0],ite)
+                            
+                            if i == self.opt.dataset.train_camera_list[0]:
+                                shs_view = shs.detach().view(
+                                    -1, 3, (0 + 1) ** 2
+                                )
+                                dir_pp = means3D - cam.camera_center.repeat(
+                                    shs.shape[0], 1
+                                )
+                                dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+                                sh2rgb = eval_sh(
+                                    0, shs_view, dir_pp_normalized
+                                )
                                 
-                                    
+                                colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+                                uv_map = torch.zeros_like(gt_images[idx])
+                                self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path)
+ 
+                    
                                     
                 pbar.set_postfix({'Loss': f'{loss.item():.5f}', 
                                   'DB': f'{scales.mean().item():.5f}','var': f'{scales.var().item():.5f}'})
@@ -802,11 +777,11 @@ class Trainer:
                 loss.backward()
                 overall_loss+=loss.item()
                 self.optimizer.step()
-                self.writer.add_scalar('Train/Loss', loss.item()/len(data['R']), global_step=ep*len(self.dataloader)+iter)  
+                self.write.add_scalar('Train/Loss', loss.item()/len(data['R']), global_step=ep*len(self.dataloader)+ite)  
                 
             self.opt.smpl_reg_scale *= 0.7
             self.scheduler.step()
-            self.writer.add_scalar('Train/Loss Epoch', overall_loss/(len(self.dataloader)*len(data['R'])), global_step=ep) 
+            self.write.add_scalar('Train/Loss Epoch', overall_loss/(len(self.dataloader)*len(data['R'])), global_step=ep) 
             
                 
 
@@ -840,6 +815,7 @@ class Trainer:
         return l
     
     def inverse_sigmoid(self,x):
+        # import ipdb;ipdb.set_trace()
         return np.log(x/(1-x))
         
     def save_ply(self, path, xyz, opacity, scale, rotation, color, idx):
@@ -859,12 +835,13 @@ class Trainer:
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
         
 
-        attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), self.inverse_sigmoid(scale),self.inverse_sigmoid(rotation)), axis=1)
+        attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), np.log(scale),rotation), axis=1)
         
 
    
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
+        # print(f'ply saved in {path}')
 
         PlyData([el]).write(os.path.join(path,f'{idx}.ply'))
 
@@ -1079,11 +1056,11 @@ class Trainer:
             from sklearn.neighbors import NearestNeighbors
             from scipy.ndimage import binary_dilation, binary_erosion
 
-            inpaint_region = binary_dilation(mask, iterations=32)
+            inpaint_region = binary_dilation(mask, iteations=32)
             inpaint_region[mask] = 0
 
             search_region = mask.copy()
-            not_search_region = binary_erosion(search_region, iterations=3)
+            not_search_region = binary_erosion(search_region, iteations=3)
             search_region[not_search_region] = 0
 
             search_coords = np.stack(np.nonzero(search_region), axis=-1)
@@ -1453,8 +1430,8 @@ class Trainer:
         
     
     # no gui mode
-    def train(self, iters=500):
-        if iters > 0:
+    def train(self, ites=500):
+        if ites > 0:
             self.prepare_train()
             # prepare_train_3DGS()
             
@@ -1468,27 +1445,23 @@ class Trainer:
             
                 
                 
-            for i in tqdm.trange(iters):
+            for i in tqdm.trange(ites):
                 values = self.train_step(i)
                 # if self.opt.post_3DGS:
                 #     train_step_3DGS(i,values)
-                
-                
+
                 if i % self.opt.eval_interval == 0:
                     os.makedirs(os.path.join(self.opt.vis_eval_depth_path),exist_ok=True)
                     os.makedirs(os.path.join(self.opt.vis_eval),exist_ok=True)
                     self.eval(i)
-                    
-                        
-                
                
                 if i % self.opt.save_interval == 0:
                     # self.save_model(mode='model')
                     os.makedirs(f'./checkpoints/{self.opt.save_path}/',exist_ok=True)
                     os.makedirs(f'./checkpoints/{self.opt.save_path}/{self.opt.save_name}',exist_ok=True)
                     with torch.no_grad():
-                        torch.save(self.encoder.state_dict(), f'./checkpoints/{self.opt.save_path}/{self.opt.save_name}/epoch{i}.pth')
-        self.writer.close()   
+                        torch.save(self.model.state_dict(), f'./checkpoints/{self.opt.save_path}/{self.opt.save_name}/epoch{i}.pth')
+        self.write.close()
             # do a last prune
             # self.renderer.gaussians.prune(min_opacity=0.01, extent=1, max_screen_size=1)
         # save

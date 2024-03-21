@@ -11,11 +11,10 @@ import torch.nn.functional as F
 import rembg
 
 from cam_utils import orbit_camera, OrbitCamera
-from gs_renderer import Renderer, MiniCam,Camera
+from gs_renderer import Renderer, MiniCam
 
 from grid_put import mipmap_linear_grid_put_2d
 from mesh import Mesh, safe_normalize
-import random
 
 class GUI:
     def __init__(self, opt):
@@ -24,16 +23,6 @@ class GUI:
         self.W = opt.W
         self.H = opt.H
         self.cam = OrbitCamera(opt.W, opt.H, r=opt.radius, fovy=opt.fovy)
-        # self.cam =
-        # self.cam = MiniCam(
-            
-        #     opt.W,
-        #     opt.H,
-        #     opt.fovy,
-        #     opt.fovx,
-        #     opt.near,
-        #     opt.far,
-        # )
 
         self.mode = "image"
         self.seed = "random"
@@ -54,8 +43,6 @@ class GUI:
         # renderer
         self.renderer = Renderer(sh_degree=self.opt.sh_degree)
         self.gaussain_scale_factor = 1
-        
-        self.mask_weight = 0
 
         # input image
         self.input_img = None
@@ -76,8 +63,8 @@ class GUI:
         self.train_steps = 1  # steps per rendering loop
         
         # load input data from cmdline
-        # if self.opt.input is not None:
-        self.load_input(self.opt.input,self.opt.mask,self.opt.extra_input,self.opt.extra_mask)
+        if self.opt.input is not None:
+            self.load_input(self.opt.input)
         
         # override prompt from cmdline
         if self.opt.prompt is not None:
@@ -132,90 +119,45 @@ class GUI:
             pose = orbit_camera(self.opt.elevation, 90, self.opt.radius)
         else:
             pose = orbit_camera(self.opt.elevation, 0, self.opt.radius)
-        # self.fixed_cam = MiniCam(
-        #     pose,
-        #     self.opt.ref_size,
-        #     self.opt.ref_size,
-        #     self.cam.fovy,
-        #     self.cam.fovx,
-        #     self.cam.near,
-        #     self.cam.far,
-        # )
-        # w2c =  np.array([[-0.21479376,  0.97530603, -0.05139819, -0.58367276],
-        # [-0.28440347, -0.01211553,  0.9586281 ,  1.0210757 ],
-        # [ 0.9343331 ,  0.22052516,  0.27998278,  2.722229  ],
-        # [ 0.        ,  0.        ,  0.        ,  1.        ]]).astype(np.float32)
-        extra_cam_info = np.load(self.opt.cam)
-        # import ipdb;ipdb.set_trace()
-        # w2c = extra_cam_info['w2c'][0]
-        # self.fixed_cam = MiniCam(
-        #     w2c,
-        #     self.opt.ref_size,
-        #     self.opt.ref_size,
-        #     extra_cam_info['fovy'][0],
-        #     extra_cam_info['fovx'][0],
-        #     0.1,
-        #     100,
-        # )
-        
-        
-        self.extra_cam = []
-        # import ipdb;ipdb.set_trace()
-        for i in range(0,22):
-            # w2c = extra_cam_info['w2c'][i]
-            # import ipdb;ipdb.set_trace()
-            self.extra_cam.append( Camera(
-                torch.tensor(extra_cam_info['R'][i]).to(self.device),
-                torch.tensor(extra_cam_info['T'][i]).to(self.device),
-                torch.tensor((extra_cam_info['K'][i])).to(self.device),
-                
-                torch.tensor(extra_cam_info['fovx'][i]).to(self.device),
-                torch.tensor(extra_cam_info['fovy'][i]).to(self.device),
-                1024,
-                1024
+        self.fixed_cam = MiniCam(
+            pose,
+            self.opt.ref_size,
+            self.opt.ref_size,
+            self.cam.fovy,
+            self.cam.fovx,
+            self.cam.near,
+            self.cam.far,
+        )
 
-                
-            ))
-            # self.extra_cam.append( MiniCam(
-            #     w2c.astype(np.float32),
-            #     self.opt.ref_size,
-            #     self.opt.ref_size,
-            #     extra_cam_info['fovy'][i],
-            #     extra_cam_info['fovx'][i],
-            #     0.1,
-            #     100,
-            # ))
-        # import ipdb;ipdb.set_trace()
-        
         self.enable_sd = self.opt.lambda_sd > 0 and self.prompt != ""
         self.enable_zero123 = self.opt.lambda_zero123 > 0 and self.input_img is not None
 
         # lazy load guidance model
-        # if self.guidance_sd is None and self.enable_sd:
-        #     if self.opt.mvdream:
-        #         print(f"[INFO] loading MVDream...")
-        #         from guidance.mvdream_utils import MVDream
-        #         self.guidance_sd = MVDream(self.device)
-        #         print(f"[INFO] loaded MVDream!")
-        #     elif self.opt.imagedream:
-        #         print(f"[INFO] loading ImageDream...")
-        #         from guidance.imagedream_utils import ImageDream
-        #         self.guidance_sd = ImageDream(self.device)
-        #         print(f"[INFO] loaded ImageDream!")
-        #     else:
-        #         print(f"[INFO] loading SD...")
-        #         from guidance.sd_utils import StableDiffusion
-        #         self.guidance_sd = StableDiffusion(self.device)
-        #         print(f"[INFO] loaded SD!")
+        if self.guidance_sd is None and self.enable_sd:
+            if self.opt.mvdream:
+                print(f"[INFO] loading MVDream...")
+                from guidance.mvdream_utils import MVDream
+                self.guidance_sd = MVDream(self.device)
+                print(f"[INFO] loaded MVDream!")
+            elif self.opt.imagedream:
+                print(f"[INFO] loading ImageDream...")
+                from guidance.imagedream_utils import ImageDream
+                self.guidance_sd = ImageDream(self.device)
+                print(f"[INFO] loaded ImageDream!")
+            else:
+                print(f"[INFO] loading SD...")
+                from guidance.sd_utils import StableDiffusion
+                self.guidance_sd = StableDiffusion(self.device)
+                print(f"[INFO] loaded SD!")
 
-        # if self.guidance_zero123 is None and self.enable_zero123:
-        #     print(f"[INFO] loading zero123...")
-        #     from guidance.zero123_utils import Zero123
-        #     if self.opt.stable_zero123:
-        #         self.guidance_zero123 = Zero123(self.device, model_key='ashawkey/stable-zero123-diffusers')
-        #     else:
-        #         self.guidance_zero123 = Zero123(self.device, model_key='ashawkey/zero123-xl-diffusers')
-        #     print(f"[INFO] loaded zero123!")
+        if self.guidance_zero123 is None and self.enable_zero123:
+            print(f"[INFO] loading zero123...")
+            from guidance.zero123_utils import Zero123
+            if self.opt.stable_zero123:
+                self.guidance_zero123 = Zero123(self.device, model_key='ashawkey/stable-zero123-diffusers')
+            else:
+                self.guidance_zero123 = Zero123(self.device, model_key='ashawkey/zero123-xl-diffusers')
+            print(f"[INFO] loaded zero123!")
 
         # input image
         if self.input_img is not None:
@@ -224,171 +166,125 @@ class GUI:
 
             self.input_mask_torch = torch.from_numpy(self.input_mask).permute(2, 0, 1).unsqueeze(0).to(self.device)
             self.input_mask_torch = F.interpolate(self.input_mask_torch, (self.opt.ref_size, self.opt.ref_size), mode="bilinear", align_corners=False)
-            self.input_mask_torch[self.input_mask_torch>0] = 1
-        # import ipdb;ipdb.set_trace()
-        if self.extra_img is not None:
-            for i in range(len(self.extra_img)):
-                self.extra_img[i] = torch.from_numpy(self.extra_img[i]).permute(2, 0, 1).unsqueeze(0).to(self.device)
-                
-                self.extra_img[i] = F.interpolate(self.extra_img[i], (self.opt.ref_size, self.opt.ref_size), mode="bilinear", align_corners=False)
 
-                self.extra_mask[i] = torch.from_numpy(self.extra_mask[i]).permute(2, 0, 1).unsqueeze(0).to(self.device)
-                
-                self.extra_mask[i] = F.interpolate(self.extra_mask[i], (self.opt.ref_size, self.opt.ref_size), mode="bilinear", align_corners=False)
-                self.extra_mask[i][self.extra_mask[i]>0] = 1
-        
         # prepare embeddings
-        # with torch.no_grad():
+        with torch.no_grad():
 
-        #     if self.enable_sd:
-        #         if self.opt.imagedream:
-        #             self.guidance_sd.get_image_text_embeds(self.input_img_torch, [self.prompt], [self.negative_prompt])
-        #         else:
-        #             self.guidance_sd.get_text_embeds([self.prompt], [self.negative_prompt])
+            if self.enable_sd:
+                if self.opt.imagedream:
+                    self.guidance_sd.get_image_text_embeds(self.input_img_torch, [self.prompt], [self.negative_prompt])
+                else:
+                    self.guidance_sd.get_text_embeds([self.prompt], [self.negative_prompt])
 
-        #     if self.enable_zero123:
-        #         self.guidance_zero123.get_img_embeds(self.input_img_torch)
+            if self.enable_zero123:
+                self.guidance_zero123.get_img_embeds(self.input_img_torch)
 
     def train_step(self):
         starter = torch.cuda.Event(enable_timing=True)
         ender = torch.cuda.Event(enable_timing=True)
         starter.record()
 
-        for step in range(self.train_steps):
-            self.optimizer.zero_grad()
+        for _ in range(self.train_steps):
+
             self.step += 1
             step_ratio = min(1, self.step / self.opt.iters)
 
             # update lr
             self.renderer.gaussians.update_learning_rate(self.step)
 
-            loss = 0.0
+            loss = 0
 
             ### known view
-#             if self.input_img_torch is not None and not self.opt.imagedream:
-#                 cur_cam = self.fixed_cam
-# #                 # import ipdb;ipdb.set_trace()
-#                 out = self.renderer.render(cur_cam)
-                
-# #                 # import ipdb;ipdb.set_trace()
-# #                 # rgb loss
-#                 image = out["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
-#                 mask = out["alpha"].unsqueeze(0) 
-                
-                
-              
-# #                 # loss = loss + 10000 * (step_ratio if self.opt.warmup_rgb_loss else 1) * F.mse_loss(image, self.input_img_torch)
-# #                 # if step % 50 == 0:
-# #                 #     save_path = os.path.join(self.opt.outdir, self.opt.save_path + f'{step}_rgb.png')
-# #                 #     image = image.permute(0, 2, 3, 1).contiguous().detach().cpu().numpy()[0]
-# #                 #     cv2.imwrite(save_path, image[..., ::-1] * 255)
-# #                 # import ipdb;ipdb.set_trace()
-               
-# #                 # loss = loss +  10000*F.mse_loss(image, self.input_img_torch.float())
-#                 temp = image * mask[0,0][None,None,:]
-                
-# #                 # import ipdb;ipdb.set_trace()
-#                 temp_target = self.input_img_torch.float() * self.input_mask_torch[0,0][None,None,:]
-                
-#                 temp_target = torch.permute(temp_target,(0,2,3,1))
-#                 temp = torch.permute(temp,(0,2,3,1))
-                
-# #                 # import ipdb;ipdb.set_trace()
+            if self.input_img_torch is not None and not self.opt.imagedream:
+                cur_cam = self.fixed_cam
+                out = self.renderer.render(cur_cam)
 
-# #                 # loss = loss +  10000*F.mse_loss(temp, temp_target)
-# #                 # Ll1 = l1_loss(image, gt_image)
-# #                 # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-# #                 # import ipdb;ipdb.set_trace()
-# #                 loss = loss +  10000*F.mse_loss(temp[temp_target>0], temp_target[temp_target>0])
-#                 # loss = loss +  10000*F.mse_loss(temp, temp_target)
-#                 loss = loss + 10000 * (step_ratio if self.opt.warmup_rgb_loss else 1) * F.mse_loss(image, self.input_img_torch.float())
+                # rgb loss
+                image = out["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
+                loss = loss + 10000 * (step_ratio if self.opt.warmup_rgb_loss else 1) * F.mse_loss(image, self.input_img_torch)
 
-# #                 # mask loss
-# #                 # [1, 1, H, W] in [0, 1]
-# #                 # import ipdb;ipdb.set_trace()
-#                 loss = loss + 1000 * (step_ratio if self.opt.warmup_rgb_loss else 1) * F.mse_loss(mask, self.input_mask_torch.float())
-#                 # loss = loss + 1000* F.mse_loss(mask, self.input_mask_torch.float())
-#                 # import ipdb;ipdb.set_trace()
-#                 if self.step % 500 == 0 or self.step == 1:
-#                     save_path = os.path.join(self.opt.outdir, self.opt.save_path + f'{self.step}_rgb_view0.png')
-#                     # import ipdb;ipdb.set_trace()
-#                     image = image.permute(0, 2, 3, 1).contiguous().detach().cpu().numpy()[0]
-#                     # cv2.imwrite(save_path, image[::,:-1] * 255)
-#                     # import ipdb;ipdb.set_trace()
-#                     # cv2.imwrite(save_path, image* 255)
-#                     cv2.imwrite(save_path, np.concatenate((temp_target.cpu().numpy()[0],image[..., ::-1]),axis=1) * 255)
+                # mask loss
+                mask = out["alpha"].unsqueeze(0) # [1, 1, H, W] in [0, 1]
+                loss = loss + 1000 * (step_ratio if self.opt.warmup_rgb_loss else 1) * F.mse_loss(mask, self.input_mask_torch)
+
+            ### novel view (manual batch)
+            render_resolution = 128 if step_ratio < 0.3 else (256 if step_ratio < 0.6 else 512)
+            images = []
+            poses = []
+            vers, hors, radii = [], [], []
+            # avoid too large elevation (> 80 or < -80), and make sure it always cover [min_ver, max_ver]
+            min_ver = max(min(self.opt.min_ver, self.opt.min_ver - self.opt.elevation), -80 - self.opt.elevation)
+            max_ver = min(max(self.opt.max_ver, self.opt.max_ver - self.opt.elevation), 80 - self.opt.elevation)
+
+            for _ in range(self.opt.batch_size):
+
+                # render random view
+                ver = np.random.randint(min_ver, max_ver)
+                hor = np.random.randint(-180, 180)
+                radius = 0
+
+                vers.append(ver)
+                hors.append(hor)
+                radii.append(radius)
+
+                pose = orbit_camera(self.opt.elevation + ver, hor, self.opt.radius + radius)
+                poses.append(pose)
+
+                cur_cam = MiniCam(pose, render_resolution, render_resolution, self.cam.fovy, self.cam.fovx, self.cam.near, self.cam.far)
+
+                bg_color = torch.tensor([1, 1, 1] if np.random.rand() > self.opt.invert_bg_prob else [0, 0, 0], dtype=torch.float32, device="cuda")
+                out = self.renderer.render(cur_cam, bg_color=bg_color)
+
+                image = out["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
+                images.append(image)
+
+                # enable mvdream training
+                if self.opt.mvdream or self.opt.imagedream:
+                    for view_i in range(1, 4):
+                        pose_i = orbit_camera(self.opt.elevation + ver, hor + 90 * view_i, self.opt.radius + radius)
+                        poses.append(pose_i)
+
+                        cur_cam_i = MiniCam(pose_i, render_resolution, render_resolution, self.cam.fovy, self.cam.fovx, self.cam.near, self.cam.far)
+
+                        # bg_color = torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32, device="cuda")
+                        out_i = self.renderer.render(cur_cam_i, bg_color=bg_color)
+
+                        image = out_i["image"].unsqueeze(0) # [1, 3, H, W] in [0, 1]
+                        images.append(image)
                     
-#                     # with torch.no_grad(): 
-            # import ipdb;ipdb.set_trace()
-            all_out = []
-            view = random.randint(0,len(self.extra_cam)-2)
-            
-            cur_cam = self.extra_cam[view]
-            
-            output = self.renderer.render(cur_cam)
-            if view != len(self.extra_cam)-1:
-                out = output
-            extra_image = output["image"].unsqueeze(0) 
-            extra_mask = output["alpha"].unsqueeze(0)
-            
-            
-            # import ipdb;ipdb.set_trace()
-            # temp = extra_image*extra_mask[0,0][None,None,:]
-            temp = extra_image
-            # extra_mask[0,0][None,None,:]
-            temp_target = self.extra_img[view].float()*self.extra_mask[view][0,0][None,None,:]
-            
-            temp_target = torch.permute(temp_target,(0,2,3,1))
-            temp = torch.permute(temp,(0,2,3,1))
-            # np.save(f'img.npy',temp.detach().cpu().numpy())
-            # import ipdb;ipdb.set_trace()
-            if view != len(self.extra_cam)-1:
-                loss = loss +  10000*(step_ratio if self.opt.warmup_rgb_loss else 1)*F.mse_loss(temp, temp_target)
+            images = torch.cat(images, dim=0)
+            poses = torch.from_numpy(np.stack(poses, axis=0)).to(self.device)
 
-            # if view == 0:
-            # loss = loss + 10000* F.mse_loss(temp[temp_target>0], temp_target[temp_target>0])
-                # loss = loss + 10000* F.mse_loss(temp, temp_target)
-                # np.save(f'target.npy',temp_target.detach().cpu().numpy())
+            # import kiui
+            # print(hor, ver)
+            # kiui.vis.plot_image(images)
 
-                
-                # loss = loss + 10000* F.mse_loss(extra_image, self.extra_img[view].float())
+            # guidance loss
+            if self.enable_sd:
+                if self.opt.mvdream or self.opt.imagedream:
+                    loss = loss + self.opt.lambda_sd * self.guidance_sd.train_step(images, poses, step_ratio=step_ratio if self.opt.anneal_timestep else None)
+                else:
+                    loss = loss + self.opt.lambda_sd * self.guidance_sd.train_step(images, step_ratio=step_ratio if self.opt.anneal_timestep else None)
 
-
-                
-
+            if self.enable_zero123:
+                loss = loss + self.opt.lambda_zero123 * self.guidance_zero123.train_step(images, vers, hors, radii, step_ratio=step_ratio if self.opt.anneal_timestep else None, default_elevation=self.opt.elevation)
             
-            # mask loss
-                # [1, 1, H, W] in [0, 1]
-            
-                loss = loss +1000*(step_ratio if self.opt.warmup_rgb_loss else 1)*F.mse_loss(extra_mask, self.extra_mask[view].float())
-            if self.step % 200 == 0 :
-                self.mask_weight = self.mask_weight*0.1
-                
-            if self.step % 200 == 0 or self.step == 1:
-            
-                save_path = os.path.join(self.opt.outdir, self.opt.save_path + f'{self.step}_rgb_view_{view+1}.png')
-                # import ipdb;ipdb.set_trace()
-                extra_image = extra_image.permute(0, 2, 3, 1).contiguous().detach().cpu().numpy()[0]
-                # cv2.imwrite(save_path, image[::,:-1] * 255)
-                cv2.imwrite(save_path, np.concatenate((temp_target.cpu().numpy()[0],extra_image[..., ::-1]),axis=1) * 255)
-                
-           
+            # optimize step
             loss.backward()
             self.optimizer.step()
-            
-            # all_out 
-            # densify and prune
-            with torch.no_grad():
-                if self.step >= self.opt.density_start_iter and self.step <= self.opt.density_end_iter:
-                    viewspace_point_tensor, visibility_filter, radii = out["viewspace_points"], out["visibility_filter"], out["radii"]
-                    self.renderer.gaussians.max_radii2D[visibility_filter] = torch.max(self.renderer.gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                    self.renderer.gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+            self.optimizer.zero_grad()
 
-                    if self.step % self.opt.densification_interval == 0:
-                        self.renderer.gaussians.densify_and_prune(self.opt.densify_grad_threshold, min_opacity=0.01, extent=4, max_screen_size=1)
-                    
-                    if self.step % self.opt.opacity_reset_interval == 0:
-                        self.renderer.gaussians.reset_opacity()
+            # densify and prune
+            if self.step >= self.opt.density_start_iter and self.step <= self.opt.density_end_iter:
+                viewspace_point_tensor, visibility_filter, radii = out["viewspace_points"], out["visibility_filter"], out["radii"]
+                self.renderer.gaussians.max_radii2D[visibility_filter] = torch.max(self.renderer.gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                self.renderer.gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
+                if self.step % self.opt.densification_interval == 0:
+                    self.renderer.gaussians.densify_and_prune(self.opt.densify_grad_threshold, min_opacity=0.01, extent=4, max_screen_size=1)
+                
+                if self.step % self.opt.opacity_reset_interval == 0:
+                    self.renderer.gaussians.reset_opacity()
 
         ender.record()
         torch.cuda.synchronize()
@@ -480,78 +376,33 @@ class GUI:
             )  # buffer must be contiguous, else seg fault!
 
     
-    def load_input(self, file, mask,extra_file,extra_mask):
+    def load_input(self, file):
         # load image
-        
-        # import ipdb;ipdb.set_trace()
         print(f'[INFO] load image from {file}...')
-        
-        
-        
-        # data = np.load('/home/zhongyuj/dreamgaussian/temp_ZJU_temp_3/scales_0.npz')["gt_image"]
-        # data_list = os.path.listdirs('/home/zhongyuj/dreamgaussian/temp_ZJU_temp_3/')
-        # for i in data_list:
-        #     if i.ends_with(".npz"):
-        # img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-        
-        # if img.shape[-1] == 3:
-        #     if self.bg_remover is None:
-        #         self.bg_remover = rembg.new_session()
-        #     img = rembg.remove(img, session=self.bg_remover)
+        img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+        if img.shape[-1] == 3:
+            if self.bg_remover is None:
+                self.bg_remover = rembg.new_session()
+            img = rembg.remove(img, session=self.bg_remover)
 
-        # img = cv2.resize(img, (self.W, self.H), interpolation=cv2.INTER_AREA)
-        
-        all_img = np.load(self.opt.load)['gt_images']
-        
-        # import ipdb;ipdb.set_trace()
-        # img = np.transpose(all_img[0],(1,2,0)).astype(np.float32)
-        # # img = img.astype(np.float32) / 255.0
+        img = cv2.resize(img, (self.W, self.H), interpolation=cv2.INTER_AREA)
+        img = img.astype(np.float32) / 255.0
 
-        # # import ipdb;ipdb.set_trace()
-        # self.input_mask = cv2.imread(mask, cv2.IMREAD_UNCHANGED)[:,:,None]
-        # # self.input_mask = img[..., 3:]
-        # # white bg
-        # self.input_img = img[..., :3] * self.input_mask 
-        # # bgr to rgb
-        # self.input_img = self.input_img[..., ::-1].copy()
-        
-        # import ipdb;ipdb.set_trace()
-        self.extra_img  = []
-        self.extra_mask = []
-        for i in range(0,len(all_img)):
-            # temp_img = cv2.imread(extra_file[i], cv2.IMREAD_UNCHANGED)
-            temp_img = all_img[i]
-            temp_img = np.transpose(temp_img,(1,2,0)).astype(np.float32)
-            # if temp_img.shape[-1] == 3:
-            #     if self.bg_remover is None:
-            #         self.bg_remover = rembg.new_session()
-            #     temp_img = rembg.remove(temp_img, session=self.bg_remover)
-            # temp_img = cv2.resize(temp_img, (self.W, self.H), interpolation=cv2.INTER_AREA)
-            # temp_img = temp_img.astype(np.float32) / 255.0
-            # import ipdb;ipdb.set_trace()
-            mask_path = '/home/zhongyuj/dreamgaussian/data/ZJUMOCAP/CoreView_386/mask/Camera_B2/000204.png'
-            segment = mask_path.split('/')
-            segment[-2]= segment[-2].replace('2',str(i+1))
-            temp_mask = cv2.imread('/'.join(segment), cv2.IMREAD_UNCHANGED)[:,:,None]
-            # import ipdb;ipdb.set_trace()
-
-            # temp_mask =  cv2.imread(extra_mask[i-1], cv2.IMREAD_UNCHANGED)[:,:,None]
-            # temp_img = temp_img[..., :3] * temp_mask 
-            temp_img = temp_img[..., ::-1].copy()
-           
-            self.extra_img.append(temp_img)
-            self.extra_mask.append(temp_mask)
-        # import ipdb;ipdb.set_trace()
+        self.input_mask = img[..., 3:]
+        # white bg
+        self.input_img = img[..., :3] * self.input_mask + (1 - self.input_mask)
+        # bgr to rgb
+        self.input_img = self.input_img[..., ::-1].copy()
 
         # load prompt
-        # file_prompt = file.replace("_rgba.png", "_caption.txt")
-        # if os.path.exists(file_prompt):
-        #     print(f'[INFO] load prompt from {file_prompt}...')
-        #     with open(file_prompt, "r") as f:
-        #         self.prompt = f.read().strip()
+        file_prompt = file.replace("_rgba.png", "_caption.txt")
+        if os.path.exists(file_prompt):
+            print(f'[INFO] load prompt from {file_prompt}...')
+            with open(file_prompt, "r") as f:
+                self.prompt = f.read().strip()
 
     @torch.no_grad()
-    def save_model(self, mode='geo', texture_size=1024,epoch='last'):
+    def save_model(self, mode='geo', texture_size=1024):
         os.makedirs(self.opt.outdir, exist_ok=True)
         if mode == 'geo':
             path = os.path.join(self.opt.outdir, self.opt.save_path + '_mesh.ply')
@@ -687,9 +538,8 @@ class GUI:
             mesh.write(path)
 
         else:
-            path = os.path.join(self.opt.outdir, self.opt.save_path + f'{epoch}_model.ply')
+            path = os.path.join(self.opt.outdir, self.opt.save_path + '_model.ply')
             self.renderer.gaussians.save_ply(path)
-            
 
         print(f"[INFO] save model to {path}.")
 
@@ -1041,14 +891,11 @@ class GUI:
             self.prepare_train()
             for i in tqdm.trange(iters):
                 self.train_step()
-                
-                # if i % 200 == 0:
-                #     self.save_model(mode='model',epoch=i)
             # do a last prune
             self.renderer.gaussians.prune(min_opacity=0.01, extent=1, max_screen_size=1)
         # save
-        
         self.save_model(mode='model')
+        self.save_model(mode='geo+tex')
         
 
 if __name__ == "__main__":

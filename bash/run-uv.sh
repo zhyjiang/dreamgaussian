@@ -1,0 +1,1 @@
+CUDA_LAUNCH_BLOCKING=1 python tools/trainUV.py --config configs/humangaussian/uv.yaml

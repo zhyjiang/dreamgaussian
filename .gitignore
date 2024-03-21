@@ -36,3 +36,7 @@ DearPyGui
 *.pkl
 *.ply
 *.ipynb
+*.pickle
+*.png
+
+

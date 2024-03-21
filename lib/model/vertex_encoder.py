@@ -169,20 +169,22 @@ class VertexTransformer(nn.Module):
         self.multi_view = self.opt.multi_view
         self.dino_update = self.opt.dino_update and  self.opt.dino
         self.upsample = self.opt.upsample
+        self.ln_scale_weight = nn.Parameter( torch.randn(num_joints*self.upsample,1)*0.05,requires_grad=True)
+        
         # if self.opt.trans_decoder:
-          
+        # import ipdb;ipdb.set_trace()
         
         if self.opt.dino:
             if self.cross_attention:
 
                 self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim, hidden_dim)),requires_grad=True)
-                self.upsample_conv = nn.Conv1d(downsample_dim, num_joints*self.upsample, kernel_size=1) if self.upsample!=1 else None
+                self.upsample_conv = nn.Conv1d(downsample_dim, num_joints*self.upsample, kernel_size=1)  
             else:
                 self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim+img_dim, hidden_dim)),requires_grad=True)
-                self.upsample_conv = nn.Conv1d(downsample_dim+img_dim, num_joints*self.upsample, kernel_size=1) if self.upsample!=1 else None
+                self.upsample_conv = nn.Conv1d(downsample_dim+img_dim, num_joints*self.upsample, kernel_size=1) 
         else:
             self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.downsample_dim, hidden_dim)),requires_grad=True)
-            self.upsample_conv = nn.Conv1d(self.downsample_dim, num_joints*self.upsample, kernel_size=1) if self.upsample!=1 else None
+            self.upsample_conv = nn.Conv1d(self.downsample_dim, num_joints*self.upsample, kernel_size=1) 
         # self.cls_token = nn.Parameter(torch.randn((hidden_dim)))
         
     
@@ -219,10 +221,10 @@ class VertexTransformer(nn.Module):
             else:
                 self.dino_encoder = torch.hub.load('facebookresearch/dino:main', self.dino.path).patch_embed.to(self.device)
 
-        if self.dino_update:
-            self.dino_encoder.train()
-        else:
-            self.dino_encoder.eval()
+        # if self.dino_update:
+        #     self.dino_encoder.train()
+        # else:
+        #     self.dino_encoder.eval()
 
         self.encoder = Transformer(hidden_dim, num_layers, nhead, dim_head, mlp_dim, cross=self.cross_attention,dropout=dropout)
         if self.opt.trans_decoder:
@@ -237,15 +239,26 @@ class VertexTransformer(nn.Module):
         self.cam_proj = nn.Linear(4*4, 384)
         self.img_down = nn.Linear(384,hidden_dim)
         if self.opt.trans_decoder:
-            self.learning_query = nn.Parameter(torch.randn((self.opt.batch_size, num_joints, hidden_dim)), requires_grad=True)
+            self.learning_query = nn.Parameter(torch.randn((self.opt.batch_size, num_joints*self.upsample, hidden_dim)), requires_grad=True)
+            self.decoder_pos_embed = nn.Parameter(torch.randn((self.opt.batch_size, num_joints*self.upsample, hidden_dim)), requires_grad=True)
             self.upsample_layer = nn.Conv1d(num_joints, num_joints*self.opt.upsample, kernel_size=1)
-        self.initialize_weights()
         
+        
+        # self.temp_head = self._make_head(hidden_dim,14)
         self.mean3D_head = self._make_head(hidden_dim, 3)
         self.opacity_head = self._make_head(hidden_dim, 1)
         self.shs_head = self._make_head(hidden_dim, 3)
         self.rotations_head = self._make_head(hidden_dim, 4)
+        # self.scale_vector = torch.tensor([0.0001,0.0005,0.001,0.005,0.01,0.05,0.1]).to(self.device)
+        # self.scales_head = self._make_head(hidden_dim, 21)
         self.scales_head = self._make_head(hidden_dim, 3)
+        
+        self.initialize_weights()
+
+        
+        self.leaky_relu = nn.LeakyReLU()
+        self.relu = nn.ReLU()
+        self.softmax = nn.Softmax(dim=-1)
     
     def _make_head(self, hidden_dim, out_dim):
         layers = nn.Sequential(nn.Linear(self.hidden_dim, hidden_dim),
@@ -278,10 +291,12 @@ class VertexTransformer(nn.Module):
                 nn.init.constant_(m.bias, 0)
         
     def forward(self, x, img=None,cam=None,mask_ratio=0.0):
-        
+        # import ipdb;ipdb.set_trace()
+
         mask = None
        
         if self.dino:
+            # import ipdb;ipdb.set_trace()
 
             if not self.dino_update and self.opt.full_token:
                 with torch.no_grad():
@@ -301,10 +316,11 @@ class VertexTransformer(nn.Module):
                         img = img.unsqueeze(0)
                     img_emb = self.dino_encoder(img)
 
-            assert cam is not None
-            cam_emb = self.cam_proj(cam.reshape(cam.shape[0],-1))[:,None,:]
+           
             
             if self.camera_param:
+                assert cam is not None
+                cam_emb = self.cam_proj(cam.reshape(cam.shape[0],-1))[:,None,:]
                 emb = self.img_down(img_emb+ cam_emb)
             else:
                 emb = self.img_down(img_emb[0].unsqueeze(0))
@@ -324,6 +340,7 @@ class VertexTransformer(nn.Module):
             x = self.pre_norm(x)
             if mask is not None:
                 x = self.masking(x, mask)
+            # import ipdb;ipdb.set_trace()
             x = self.pre_conv(x)
             
         else:
@@ -339,18 +356,19 @@ class VertexTransformer(nn.Module):
         if self.dino and not self.cross_attention:
 
             x = torch.cat((emb, x), dim=1)
-            # x = self.pre_conv(x)  # 6890+4096 -> 2000
+            x = self.pre_conv(x)  # 6890+4096 -> 2000
 
         x = x + self.positional_emb
         x = self.dropout(x)
         
         
         if self.cross_attention:
+            # import ipdb;ipdb.set_trace()
             x = self.encoder(x,context=emb)
         else:
             x = self.encoder(x)
 
-        
+        # import ipdb;ipdb.set_trace()
         if self.multi_view>1:
             
             x = torch.transpose(x, 0, 1)
@@ -358,18 +376,32 @@ class VertexTransformer(nn.Module):
             
             x = torch.transpose(x, 0, 1)
         
+        
+        # import ipdb;ipdb.set_trace()
         if self.opt.trans_decoder:
-            x = self.decoder(self.learning_query,context=x)
-            x = self.upsample_layer(x)
-            
-        if self.upsample != 1 and not self.opt.trans_decoder:
+            x = self.decoder((self.learning_query+self.decoder_pos_embed),context=x)
+            # x = self.upsample_layer(x)
+        if not self.opt.trans_decoder:
             x = self.upsample_conv(x) # 2000+4096 -> 6890*n
-
+        # res = self.temp_head(x)
+        
+        # means3D, opacity, scales, shs, rotations = res[...,0:3] , res[...,3:4],res[...,4:7],res[...,7:11],res[...,11:14]
+        # opacity = opacity.sigmoid()
+        # rotations = rotations.sigmoid()
+        # scales = scales.sigmoid()
+        # import ipdb;ipdb.set_trace()
         means3D = self.mean3D_head(x)
         opacity = self.opacity_head(x).sigmoid()
         shs = self.shs_head(x)
+        # rotations = torch.nn.functional.normalize(self.rotations_head(x))
         rotations = self.rotations_head(x).sigmoid()
         scales = self.scales_head(x).sigmoid()
+        # import ipdb;ipdb.set_trace()
+
+        # scales = self.softmax(self.scales_head(x).reshape(x.shape[0],-1,3,7))
+        # scales = torch.einsum('ijlk,k->ijl', scales, self.scale_vector)
+        # import ipdb;ipdb.set_trace()
+
         return means3D, opacity, scales, shs, rotations
     
     def masking(self, x, mask):
