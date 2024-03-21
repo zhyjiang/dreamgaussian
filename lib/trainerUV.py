@@ -683,6 +683,8 @@ class Trainer:
                         cur_corners = torch.clamp(corners[0],0,1024)
                         
                         temp_gt_images = gt_images[0][cur_corners[1][1]:cur_corners[0][1],cur_corners[1][0]:cur_corners[0][0]].unsqueeze(0)
+                        # import ipdb;ipdb.set_trace()
+                        # cv2.imwrite(os.path.join(self.opt.vis_path,f'{ite}_cropped.jpg'), temp_gt_images[0].cpu().numpy()*255.0)
                     else:
                         temp_gt_images = gt_images[0].unsqueeze(0)
                 means3D, opacity, scales, shs, rotations,features,features_all = self.model(pose,shape,temp_gt_images,cam=None)

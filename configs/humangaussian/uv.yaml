@@ -15,8 +15,8 @@ learned_scale_weight: 0.05
 crop_image: True
 dino:
   image_embed: True
-  name: ViT-S
-  path: dino_vits16
+  name: ViT-B
+  path: dino_vitb16
 
 vis_path: UV_ZJU_output_smpl_feature_1.0_0.05_scale_1024loss_224uv_crop
 vis_ply_path: UV_ZJU_output_smpl_feature_1.0_0.05_scale_1024loss_224uv_crop
@@ -118,7 +118,7 @@ late_can2w: False
 
 triplane : False
 
-lr: 0.0005 #0.001
+lr: 0.001 #0.001
 base_lr: 0.0002 #0.0001
 warmup: 10 #10
 

@@ -361,17 +361,17 @@ class UV_Transformer(nn.Module):
             # self.trans = nn.Linear(3, hidden_dim, bias=False)
         if self.dino:
             if self.opt.full_token and self.opt.reshape: 
-                self.processor = ViTImageProcessor.from_pretrained('facebook/dino-vits16')
-                config=ViTConfig.from_pretrained('facebook/dino-vits16')
-                self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16',config=config,ignore_mismatched_sizes=True).to(self.device)
+                self.processor = ViTImageProcessor.from_pretrained('facebook/dino-vitb16')
+                config=ViTConfig.from_pretrained('facebook/dino-vitb16')
+                self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vitb16',config=config,ignore_mismatched_sizes=True).to(self.device)
             elif self.opt.full_token:
-                self.processor = ViTImageProcessor.from_pretrained('facebook/dino-vits16')
+                self.processor = ViTImageProcessor.from_pretrained('facebook/dino-vitb16')
                 self.processor.size['height'] = H
                 self.processor.size['width'] = W
                 
-                config=ViTConfig.from_pretrained('facebook/dino-vits16')
+                config=ViTConfig.from_pretrained('facebook/dino-vitb16')
                 config.image_size = (H, W)
-                self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16',config=config,ignore_mismatched_sizes=True).to(self.device)
+                self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vitb16',config=config,ignore_mismatched_sizes=True).to(self.device)
             else:
                 self.dino_encoder = torch.hub.load('facebookresearch/dino:main', self.dino.path).patch_embed.to(self.device)
 
@@ -398,7 +398,7 @@ class UV_Transformer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         self.upsample = self.opt.upsample
-        self.img_down = nn.Linear(384,hidden_dim)
+        self.img_down = nn.Linear(768,hidden_dim)
         self.upsampler = nn.Sequential(nn.Linear(14*14, 14*14),
                                nn.GELU(),
                                nn.Dropout(0.1),
