@@ -245,6 +245,7 @@ class ZJU(Dataset):
         image_list = []
         ori_image_list = []
         mask_list = []
+        corners = []
         ori_mask_list = []
         bound_mask_list= []
         ori_bound_mask_list = []
@@ -341,9 +342,8 @@ class ZJU(Dataset):
             mask_list.append(mask_image)
             image_list.append(cur_image)
             
-            bound_mask = self.get_bound_2d_mask(world_bound, cur_K, w2c[:3],self.H ,self.W).astype(np.float32)
-            
-            # import ipdb;ipdb.set_trace()
+            bound_mask,max_corner,min_corner = self.get_bound_2d_mask(world_bound, cur_K, w2c[:3],self.H ,self.W,return_corners=True)
+            bound_mask = bound_mask.astype(np.float32)
             bound_mask_list.append(bound_mask)
             # cur_image = self.transform(cv2.imread(self.image_path[i][index]).astype(np.float32).transpose(2, 0, 1) / 255)
             # # import ipdb;ipdb.set_trace()
@@ -360,6 +360,7 @@ class ZJU(Dataset):
             K.append(cur_K)
             R.append(cur_R)
             T.append(cur_T)
+            corners.append((max_corner,min_corner))
             
             fovx.append(self.focal2fov(cur_K[0,0], self.cfg.dataset.H))
             fovy.append(self.focal2fov(cur_K[1,1], self.cfg.dataset.W))
@@ -382,6 +383,7 @@ class ZJU(Dataset):
             'fovx': np.array(fovx),
             'fovy': np.array(fovy),
             'bound_mask': np.array(bound_mask_list),
+            'corners': np.array(corners),
             # 'w2c': w2c,
         }
 
@@ -418,7 +420,7 @@ class ZJU(Dataset):
         xy = xyz[:, :2] / xyz[:, 2:]
         return xy
 
-    def get_bound_2d_mask(self,bounds, K, pose, H, W):
+    def get_bound_2d_mask(self,bounds, K, pose, H, W,return_corners=False):
         # import ipdb;ipdb.set_trace()
         corners_3d = self.get_bound_corners(bounds)
         corners_2d = self.project(corners_3d, K, pose)
@@ -431,6 +433,8 @@ class ZJU(Dataset):
         cv2.fillPoly(mask, [corners_2d[[2, 3, 7, 6, 2]]], 1)
         cv2.fillPoly(mask, [corners_2d[[0, 2, 6, 4, 0]]], 1)
         cv2.fillPoly(mask, [corners_2d[[1, 3, 7, 5, 1]]], 1)
+        if return_corners:
+            return mask, np.max(corners_2d,axis=0),np.min(corners_2d,axis=0)
         return mask
     
     

@@ -223,7 +223,6 @@ class TransformerDecoderLayer(nn.Module):
         self.normalize_before = normalize_before
 
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
-        # import ipdb;ipdb.set_trace()
         
         return tensor if pos is None else tensor + pos
 
@@ -349,19 +348,9 @@ class UV_Transformer(nn.Module):
         
         if self.input_mode == 'image+smpl':
             self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.img_channel+2, hidden_dim)),requires_grad=True)
-        elif self.input_mode == 'smpl':
-            self.positional_emb = nn.Parameter(torch.randn((self.multi_view, 2, hidden_dim)),requires_grad=True)
         else:
             self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.img_channel, hidden_dim)),requires_grad=True)
-        
-        # self.proj_layer = nn.Linear(hidden_dim, hidden_dim, bias=False)
 
-        # self.pre_emb = nn.Linear(pose_dim, hidden_dim)
-        # self.pre_norm = nn.LayerNorm(hidden_dim)
-        # if self.param_input:
-        #     self.pre_conv = nn.Conv1d(2,self.downsample_dim, kernel_size=1)
-        # else:
-        #     self.pre_conv = nn.Conv1d(num_joints,self.downsample_dim, kernel_size=1)
         self.generator = generator
         
         if self.param_input and self.input_mode!='image':
@@ -385,7 +374,7 @@ class UV_Transformer(nn.Module):
                 self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16',config=config,ignore_mismatched_sizes=True).to(self.device)
             else:
                 self.dino_encoder = torch.hub.load('facebookresearch/dino:main', self.dino.path).patch_embed.to(self.device)
-        # import ipdb;ipdb.set_trace()
+
         encoder_layer =  TransformerEncoderLayer(hidden_dim, nhead, dim_head,
                                                 dropout)
         self.encoder = TransformerEncoder(encoder_layer, num_layers, None)
@@ -407,30 +396,13 @@ class UV_Transformer(nn.Module):
             
             
         self.dropout = nn.Dropout(dropout)
-        
-        # self.merge_views = nn.Conv1d(self.opt.multi_view, 1, kernel_size=1) if self.opt.multi_view>1 else None
-        
         self.mask_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         self.upsample = self.opt.upsample
-        # self.cam_proj = nn.Linear(4*4, 384)
         self.img_down = nn.Linear(384,hidden_dim)
         self.upsampler = nn.Sequential(nn.Linear(14*14, 14*14),
                                nn.GELU(),
                                nn.Dropout(0.1),
                                nn.Linear(14*14, 14*14*16*16))
-                
-        # self.upsampler2 = nn.Sequential(nn.Linear(14*16*14*16, 14*16*14*16),
-        #                        nn.GELU(),
-        #                        nn.Dropout(0.1),
-        #                        nn.Linear(14*16*14*16*4, 1024*1024))
-        
-        # self.upsampler3 = nn.Sequential(nn.Linear(14*16*14*16*4, 14*16*14*16*4),
-        #                        nn.GELU(),
-        #                        nn.Dropout(0.1),
-        #                        nn.Linear(1024, 14*16*14*16*4))
-        # if self.opt.trans_decoder:
-        #     self.learning_query = nn.Parameter(torch.randn((self.opt.batch_size, (self.opt.dataset.H*self.opt.dataset.W)//16,hidden_dim)), requires_grad=True)
-        #     self.decoder_pos_embed = nn.Parameter(torch.randn((self.opt.batch_size, (self.opt.dataset.H*self.opt.dataset.W)//16, hidden_dim)), requires_grad=True)
         
         self.initialize_weights()
         if self.input_mode == 'image+smpl':
@@ -439,39 +411,12 @@ class UV_Transformer(nn.Module):
             self.shs_head = self._make_head(hidden_dim, 3)
             self.rotations_head = self._make_head(hidden_dim, 4)
             self.scales_head = self._make_head(hidden_dim, 3)
-            
-        elif self.input_mode == 'smpl':
-            self.mean3D_head = self._make_head(hidden_dim, 3)
-            self.opacity_head = self._make_head(hidden_dim, 1)
-            # self.shs_head = self._make_head(hidden_dim, 3)
-            self.rotations_head = self._make_head(hidden_dim, 4)
-            self.scales_head = self._make_head(hidden_dim, 3)
         else:
             self.shs_head = self._make_head(hidden_dim, 3)
-            
-        
-        
-        
 
-        # self.leaky_relu = nn.LeakyReLU()
         self.relu = nn.ReLU()
         self.softmax = nn.Softmax(dim=-1)
         self.resample = nn.Linear(224*224,6890)
-
-        # self.resample = nn.Linear(self.opt.dataset.H*self.opt.dataset.W,6890)
-        # self.upsample1 = nn.Sequential(
-        #     nn.ConvTranspose2d(in_channels=3, out_channels=3, kernel_size=4, stride=2, padding=1, bias=False),
-        #     nn.ReLU(),
-        #     nn.ConvTranspose2d(in_channels=3, out_channels=3, kernel_size=4, stride=2, padding=1, bias=False),
-        #     nn.ReLU()
-        # )
-        # # Upsample from 512x512x3 to 1024x1024x3
-        # self.upsample2 = nn.Sequential(
-        #     nn.ConvTranspose2d(in_channels=3, out_channels=3, kernel_size=4, stride=2, padding=1, bias=False),
-        #     nn.ReLU(),
-        #     nn.ConvTranspose2d(in_channels=3, out_channels=3, kernel_size=4, stride=2, padding=1, bias=False),
-        #     nn.ReLU()
-        # )
     
     def _make_head(self, hidden_dim, out_dim):
         layers = nn.Sequential(nn.Linear(hidden_dim, hidden_dim),
@@ -505,13 +450,10 @@ class UV_Transformer(nn.Module):
         mask = None
         if self.dino :
             with torch.no_grad():
-                # import ipdb;ipdb.set_trace()
                 if img.shape[-1]== 224:
                     inputs = self.processor(images=img, return_tensors="pt",do_resize=False,do_rescale=False,do_normalize=True).to(self.device)
                 else:
                     inputs = self.processor(images=img, return_tensors="pt",do_resize=True,do_rescale=False,do_normalize=True).to(self.device)
-
-                # import ipdb;ipdb.set_trace()
                 img_emb = self.dino_encoder(**inputs)
                 img_emb = img_emb['last_hidden_state'][...,1:,:]
 
@@ -536,50 +478,20 @@ class UV_Transformer(nn.Module):
             x = torch.cat((theta, beta),dim=1)
             if mask is not None:
                 x = self.masking(x, mask)
-            # import ipdb;ipdb.set_trace()
             x = torch.cat((emb, x), dim=1)
-            x = x.permute(1,0,2)
-        elif self.input_mode=='smpl':
-            # bs = x[0].shape[0]
-            theta = x[0]
-            beta = x[1]
-            theta = self.theta(theta)
-            beta = self.beta(beta)
-
-            if len(theta.shape) == 2:
-                theta = theta[:,None,:]
-                beta = beta[:,None,:]
-            x = torch.cat((theta, beta),dim=1)
-            if mask is not None:
-                x = self.masking(x, mask)
             x = x.permute(1,0,2)
         else:  #image only do nothing
             x = emb
             x = x.permute(1,0,2)
-
-            
-
-        # import ipdb;ipdb.set_trace()
         
         x= self.encoder(x,src_key_padding_mask=mask, pos=self.positional_emb.permute(1,0,2))
-        
-        if self.input_mode != 'image':
-            
+        if self.input_mode != 'image':  
             x = x[:-2,...]
         x = x.permute((1,2,0))
-        
-        
         x = self.upsampler(x)
-        # x = self.upsampler2(x)
         x = x.view(224,224,-1)
-        # x= x.view(self.opt.dataset.H,self.opt.dataset.W,-1)
-        # import ipdb;ipdb.set_trace()
-
         features = x.clone()
-        # try:
         x = self.generator.resample(x).view((bs,-1,self.hidden_dim)) 
-        # except:
-        #     import ipdb;ipdb.set_trace()
         
         if self.input_mode == 'image+smpl':
             means3D = self.mean3D_head(x)
@@ -588,14 +500,6 @@ class UV_Transformer(nn.Module):
             rotations = F.normalize(self.rotations_head(x))
             scales = self.scales_head(x).sigmoid()
             return means3D, opacity, scales, shs, rotations,features
-
-        elif self.input_mode == 'smpl':
-            means3D = self.mean3D_head(x)
-            opacity = self.opacity_head(x).sigmoid()
-            rotations = F.normalize(self.rotations_head(x))
-            scales = self.scales_head(x).sigmoid()
-            return means3D, opacity, scales, rotations,features
-
         else:
             shs = self.shs_head(x)
             return  shs, features

@@ -2,27 +2,25 @@
 outdir: logs
 mesh_format: obj
 save_path: checkpoints
-save_name: UV_ZJU_output_smpl_feature_ss_1.0_0.05_scale_1024loss_224uv #similarity score feature level
+save_name: UV_ZJU_output_smpl_feature_1.0_0.05_scale_1024loss_224uv_crop #similarity score feature level
 save_interval: 3
 eval_interval: 3
 eval_only: False
-# pretrain_path: /home/zhongyuj/dreamgaussian/checkpoints/checkpoints/temp_ZJU_temp_singleview4loss_learned_scale_0.1/epoch12.pth
-# pretrain_path: /home/zhongyuj/dreamgaussian/checkpoints/checkpoints/temp_ZJU_temp_singleview4loss/epoch30.pth
-# pretrain_path: /home/zhongyuj/dreamgaussian/checkpoints/checkpoints/UV_ZJU_output_smpl_feature_ss_1.0_0.05_scale/epoch297.pth
+# pretrain_path: /home/zhongyuj/dreamgaussian/checkpoints/checkpoints/UV_ZJU_output_smpl_feature_ss_1.0_0.05_scale_1024loss_224uv_ssloss/epoch30.pth
 pretrain_path: 
 input_mode: 'image+smpl' # 'image+smpl' or 'image' or 'smpl'
 learned_scale : False
 learned_scale_weight: 0.05
 
-crop_image: False
+crop_image: True
 dino:
   image_embed: True
   name: ViT-S
   path: dino_vits16
 
-vis_path: UV_ZJU_output_smpl_feature_ss_1.0_0.05_scale_1024loss_224uv
-vis_ply_path: UV_ZJU_output_smpl_feature_ss_1.0_0.05_scale_1024loss_224uv
-vis_second_view:  UV_ZJU_output_smpl_feature_ss_1.0_0.05_scale_1024loss_224uv
+vis_path: UV_ZJU_output_smpl_feature_1.0_0.05_scale_1024loss_224uv_crop
+vis_ply_path: UV_ZJU_output_smpl_feature_1.0_0.05_scale_1024loss_224uv_crop
+vis_second_view:  UV_ZJU_output_smpl_feature_1.0_0.05_scale_1024loss_224uv_crop
 
 reshapeto224: True
 
@@ -37,9 +35,7 @@ dataset_type:  ZJU
 dataset:
   name: ZJU  #HuMMan
   # path: [./data/ZJUMOCAP/CoreView_313, ./data/ZJUMOCAP/CoreView_314, ./data/ZJUMOCAP/CoreView_315, ./data/ZJUMOCAP/CoreView_316, ./data/ZJUMOCAP/CoreView_317, ./data/ZJUMOCAP/CoreView_318, ./data/ZJUMOCAP/CoreView_319, ./data/ZJUMOCAP/CoreView_320, ./data/ZJUMOCAP/CoreView_321, ./data/ZJUMOCAP/CoreView_322, ./data/ZJUMOCAP/CoreView_323, ./data/ZJUMOCAP/CoreView_324, ./data/ZJUMOCAP/CoreView_325, ./data/ZJUMOCAP/CoreView_326, ./data/ZJUMOCAP/CoreView_327, ./data/ZJUMOCAP/CoreView_328, ./data/ZJUMOCAP/CoreView_329, ./data/ZJUMOCAP/CoreView_330, ./data/ZJUMOCAP/CoreView_331, ./data/ZJUMOCAP/CoreView_332, ./data/ZJUMOCAP/CoreView_333, ./data/ZJUMOCAP/CoreView_334, ./data/ZJUMOCAP/CoreView_335, ./data/ZJUMOCAP/CoreView_336, ./data/ZJUMOCAP/CoreView_337, ./data/ZJUMOCAP/CoreView_338, ./data/ZJUMOCAP/CoreView_339, ./data/ZJUMOCAP/CoreView_340, ./data/ZJUMOCAP/CoreView_341, ./data/ZJUMOCAP/CoreView_342, ./data/ZJUMOCAP/CoreView_343, ./data/ZJUMOCAP/CoreView_344, ./data/ZJUMOCAP/CoreView_345, ./data/ZJUMOCAP/CoreView_346, ./data/ZJUMOCAP/CoreView_347, ./data/ZJUMOCAP/CoreView_348, ./data/ZJUMOCAP/CoreView_349, ./data/ZJUMOCAP/CoreView_350, ./data/ZJUMOCAP/CoreView_351, ./data/ZJUMOCAP/CoreView_352, ./data/ZJUMOCAP/CoreView_353, ./data/ZJUMOCAP/CoreView_354, ./data/ZJUMOCAP/Core
-  # camera_list: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\
   root: ./data/ZJUMOCAP/ 
-  # path: [313]
   path: [386,394]
   test_path: [386,394]
   camera_list: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
@@ -91,12 +87,6 @@ batch_size: 1
 # training iterations for stage 1
 iters: 300
 
-# post_3DGS: True
-# density_start_iter: 2
-# density_end_iter: 1000
-# densification_interval: 1
-# densify_grad_threshold: 0.001
-# opacity_reset_interval: 10
 
 multi_view: 1
 # whether to linearly anneal timestep
@@ -114,17 +104,11 @@ train_geo: False
 # prob to invert background color during training (0 = always black, 1 = always white)
 invert_bg_prob: 0.5
 
-similarity_score_weight: 1.0
-
-ssim_weight: 0.2
-
+similarity_score_weight: 0.0
+ssim_weight: 0.02
 scale_factor: 0.05 #0.001
-
-smpl_reg_scale:  0.1 # 0.01
-
-IOU_init_weight : 0.1
-
-IOU_weight: 0.005
+smpl_reg_scale:  0.01 # 0.01
+mask_weight: 0.1
 
 upsample: 1 # 1
 loss:  ssim_l2 # [l1 l2 ssim_l2 ssim_l1] #silou loss needs to be added in the next version
