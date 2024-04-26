@@ -8,7 +8,7 @@ from sys import platform
 from skimage.io import imread, imsave
 # from skimage.draw import circle
 from skimage.draw import polygon_perimeter as pope
-
+from matplotlib import pyplot as plt
 
 import cv2
 from time import time
@@ -50,14 +50,23 @@ class UV_Map_Generator():
                 for item in v:
                     v_to_vt[item, idx] = 1 / len(v)
                     
-            # for v in self.vt_to_v:
-            #     if max(v) > max_v:
-            #         max_v = max(v)
+            
             # vt_to_v = np.zeros((max_v + 1, len(self.vt_to_v)), dtype=np.float32)
             # for idx, v in enumerate(self.vt_to_v):
             #     for item in v:
             #         vt_to_v[item, idx] = 1 / len(v)
             self.v_to_vt = torch.from_numpy(v_to_vt).cuda()
+            # max_v = 0
+            # import ipdb;ipdb.set_trace()
+
+            # for k,v in enumerate(self.vt_to_v):
+            #     if max(v) > max_v:
+            #         max_v = max(v)
+
+            # vt_to_v = np.zeros((max_v + 1, len(self.vt_to_v)), dtype=np.float32)
+            # for k,v in enumerate(self.vt_to_v):
+                
+            #     vt_to_v[k, idx] = 1 / len(v)
             # self.vt_to_v = torch.from_numpy(vt_to_v).cuda()
             # import ipdb;ipdb.set_trace
         self.vts = torch.floor(torch.tensor(self.texcoords).to(self.device) * torch.tensor([[self.h - 1, self.w - 1]]).to(self.device)).int()
@@ -191,7 +200,7 @@ class UV_Map_Generator():
     
     def _calc_bary_info(self, h, w, F):
         s = time()
-        face_id = np.zeros((h, w), dtype=np.int)
+        face_id = np.zeros((h, w), dtype=np.int32)
         bary_weights = np.zeros((h, w, 3), dtype=np.float32)
         
         uvs = self.texcoords * np.array([[self.h - 1, self.w - 1]])
@@ -366,10 +375,11 @@ class UV_Map_Generator():
     UV_map: colored texture map with the same size as im
     '''    
     def UV_interp(self, rgbs):
+        
         face_num = self.vt_faces.shape[0]
         vt_num = self.texcoords.shape[0]
         assert(vt_num == rgbs.shape[0])
-
+        # import ipdb;ipdb.set_trace()
         
         uvs = self.texcoords * np.array([[self.h - 1, self.w - 1]])
         
@@ -425,7 +435,7 @@ class UV_Map_Generator():
     '''
         TODO: make it torch.
     '''
-    def resample(self, UV_map):
+    def resample(self, UV_map,double=False):
         h, w, c = UV_map.shape
         # device = UV_map.device 
         
@@ -446,6 +456,10 @@ class UV_Map_Generator():
         #             vt_3d[i] = UV_map[coord[0], coord[1]]
         # import ipdb; ipdb.set_trace()
         vt_3d = UV_map[self.vts[:, 0], self.vts[:, 1]]
+        # if self.opt.double:
+        #     assert self.midpoint_to_v is not None
+        #     cyka_v_3d = torch.concatenate([self.midpoint_to_v,self.v_to_vt],dim=0) @ vt_3d
+        # else:
         cyka_v_3d = self.v_to_vt.T @ vt_3d
         
         # import ipdb;ipdb.set_trace()
@@ -473,7 +487,7 @@ class UV_Map_Generator():
                 c = m[i]
                 uv_map[vts[i][0],vts[i][1]] = c
             # import ipdb;ipdb.set_trace()
-            cv2.imwrite(os.path.join(path,f'uv_map_epoch{epoch}_view{view}.png'),uv_map.cpu().numpy()[...,::-1]*255)
+            plt.imsave(os.path.join(path,f'uv_map_epoch{epoch}_view{view}.png'),uv_map.cpu().numpy()[...,::-1]*255)
         else:
             vts = torch.floor(torch.tensor(self.texcoords).to(device) * torch.tensor([[self.h - 1, self.w - 1]]).to(device)).int()
             
@@ -481,7 +495,7 @@ class UV_Map_Generator():
             im = self.UV_interp(m.cpu().numpy())
             if im.max() <= 1:
                 im = im * 255
-            cv2.imwrite(os.path.join(path,f'uv_map_epoch{epoch}_view{view}.png'),im[...,::-1])
+            plt.imsave(os.path.join(path,f'uv_map_epoch{epoch}_view{view}.png'),im[...,::-1])
 
             
             

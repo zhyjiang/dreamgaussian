@@ -315,14 +315,52 @@ def _get_activation_fn(activation):
 
 
 
+class PatchEmbed(nn.Module):
+    """ Image to Patch Embedding
+    """
+    def __init__(self, patch_size, in_chans=3, embed_dim=768):
+        super().__init__()
+        self.patch_size = patch_size
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        assert H % self.patch_size == 0 and W % self.patch_size == 0
+        x = self.proj(x).flatten(2).transpose(1, 2)
+        return x
 
 
+class SuperresolutionHybrid(nn.Module):
+    def __init__(self):
+        super(SuperresolutionHybrid,self).__init__()
+        self.upsample1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, padding=1)
+        
+        # Further upsampling
+        # self.upsample2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        # self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        
+        # Final upsampling to target size
+        self.upsample3 = nn.Upsample(size=(1024, 1024), mode='bilinear', align_corners=True)
+        self.conv3 = nn.Conv2d(64, 3, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        if len(x.shape) < 4:
+            x = x[None,...]
+        # import ipdb; ipdb.set_trace()
+        x = self.upsample1(x)
+        x = F.relu(self.conv1(x))
+        # x = self.upsample2(x)
+        # x = F.relu(self.conv2(x))
+        x = self.upsample3(x)
+        x = self.conv3(x)
+        return x
 
 
 
 class UV_Transformer(nn.Module):
-    def __init__(self, opt,generator=None,hidden_dim=64, num_joints=6890, num_layers=2, pose_dim=3, nhead=4, dropout=0.1,
-                 dim_head=64    , mlp_dim=64,downsample_dim = 196,img_dim=4096,pose_num=24,H=1024,W=1024,device='cuda'):
+    def __init__(self, opt,generator=None,hidden_dim=768, num_joints=6890, num_layers=2, pose_dim=3, nhead=4, dropout=0.1,
+                 dim_head=768,uv=False,shape=False,mlp_dim=64,downsample_dim = 196,img_dim=4096,pose_num=24,H=1024,W=1024,device='cuda'):
         super().__init__()
         
         self.opt = opt
@@ -341,25 +379,44 @@ class UV_Transformer(nn.Module):
         self.multi_view = self.opt.multi_view
         self.dino_update = self.opt.dino_update and  self.opt.dino
         self.upsample = self.opt.upsample
-        if self.opt.learned_scale_weight:
+        if self.opt.learned_scale:
             self.ln_scale_weight = nn.Parameter( torch.randn(num_joints*self.upsample,1)*0.05,requires_grad=True)
         self.img_channel= self.opt.dataset.img_channel
-        
-        
-        if self.input_mode == 'image+smpl':
-            self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.img_channel+2, hidden_dim)),requires_grad=True)
-        else:
-            self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.img_channel, hidden_dim)),requires_grad=True)
+        self.mode = 'uv' if uv else 'shape'
 
-        self.generator = generator
+        # self.w = torch.nn.Parameter(torch.randn(6890*2,6890),requires_grad=True)
         
-        if self.param_input and self.input_mode!='image':
+        
+        # if self.input_mode == 'image+smpl':
+        #     self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.img_channel+2, hidden_dim)),requires_grad=True)
+        # else:
+        #     self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.img_channel, hidden_dim)),requires_grad=True)
+        if uv:
+            self.positional_emb_q = nn.Parameter(torch.randn((self.multi_view,28*28, hidden_dim)),requires_grad=True)
+            self.learned_uv_q = nn.Parameter(torch.randn((self.multi_view,28*28, hidden_dim)),requires_grad=True)
+            if self.opt.dino_interpolation:
+                self.positional_emb = nn.Parameter(torch.randn((self.multi_view, 4096, hidden_dim)),requires_grad=True)
+            else:
+                self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.img_channel, hidden_dim)),requires_grad=True)
+        else:
+            self.positional_emb_q = nn.Parameter(torch.randn((self.multi_view,6890, hidden_dim)),requires_grad=True)
+            self.learned_uv_q = nn.Parameter(torch.randn((self.multi_view,6890, hidden_dim)),requires_grad=True)
+            if self.opt.dino_interpolation:
+                self.positional_emb = nn.Parameter(torch.randn((self.multi_view, 4098, hidden_dim)),requires_grad=True)
+            else:
+                self.positional_emb = nn.Parameter(torch.randn((self.multi_view, self.img_channel+2, hidden_dim)),requires_grad=True)
+            
+        # if self.opt.uv_query:
+        #     self.learned_down = nn.Sequential(nn.Linear(224*224, 56*56),
+        #                         nn.GELU(),
+        #                         nn.Dropout(0.1),
+        #                         nn.Linear(56*56, 56*56))
+        self.generator = generator
+        if self.param_input and not uv:
             self.beta = nn.Linear(10, hidden_dim, bias=False)
             
             self.theta = nn.Linear(pose_num*3, hidden_dim, bias=False)
-            # self.rotate = nn.Linear(3, hidden_dim, bias=False)
-            # self.trans = nn.Linear(3, hidden_dim, bias=False)
-        if self.dino:
+        if self.dino and uv:
             if self.opt.full_token and self.opt.reshape: 
                 self.processor = ViTImageProcessor.from_pretrained('facebook/dino-vitb16')
                 config=ViTConfig.from_pretrained('facebook/dino-vitb16')
@@ -375,9 +432,24 @@ class UV_Transformer(nn.Module):
             else:
                 self.dino_encoder = torch.hub.load('facebookresearch/dino:main', self.dino.path).patch_embed.to(self.device)
 
-        encoder_layer =  TransformerEncoderLayer(hidden_dim, nhead, dim_head,
+        
+        if self.opt.uv_query:
+            if uv:
+                encoder_layer = TransformerDecoderLayer(hidden_dim, nhead, dim_head,
+                                                    dropout)
+                encoder_norm = nn.LayerNorm(hidden_dim)
+                self.encoder = TransformerDecoder(encoder_layer, num_layers, encoder_norm,
+                                                return_intermediate=False)
+            else: #shape
+                encoder_layer = TransformerDecoderLayer(hidden_dim, nhead, dim_head,
+                                                    dropout)
+                encoder_norm = nn.LayerNorm(hidden_dim)
+                self.encoder = TransformerDecoder(encoder_layer, num_layers, encoder_norm,
+                                                return_intermediate=False)
+        else:
+            encoder_layer =  TransformerEncoderLayer(hidden_dim, nhead, dim_head,
                                                 dropout)
-        self.encoder = TransformerEncoder(encoder_layer, num_layers, None)
+            self.encoder = TransformerEncoder(encoder_layer, num_layers, None)
 
         if self.opt.triplane:
             self.tokenizer = TriplaneLearnablePositionalEmbedding(plane_size=64, num_channels=hidden_dim)
@@ -398,25 +470,38 @@ class UV_Transformer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         self.upsample = self.opt.upsample
-        self.img_down = nn.Linear(768,hidden_dim)
-        self.upsampler = nn.Sequential(nn.Linear(14*14, 14*14),
-                               nn.GELU(),
-                               nn.Dropout(0.1),
-                               nn.Linear(14*14, 14*14*16*16))
+
         
-        self.initialize_weights()
-        if self.input_mode == 'image+smpl':
+        if uv :
+            if self.opt.uv_query:
+                self.upsampler = nn.Sequential(nn.Linear(28*28, 28*28),
+                                    nn.GELU(),
+                                    nn.Dropout(0.1),
+                                    nn.Linear(28*28,14*14*16*16))
+            else:
+                self.upsampler = nn.Sequential(nn.Linear(self.img_channel, self.img_channel),
+                                    nn.GELU(),
+                                    nn.Dropout(0.1),
+                                    nn.Linear(self.img_channel, 224*224))
+            
+            self.resample = nn.Linear(224*224,6890)
+
+            self.shs_head = self._make_head(hidden_dim, 3)
+            self.img_down = None
+        else:
+
             self.mean3D_head = self._make_head(hidden_dim, 3)
             self.opacity_head = self._make_head(hidden_dim, 1)
             self.shs_head = self._make_head(hidden_dim, 3)
             self.rotations_head = self._make_head(hidden_dim, 4)
             self.scales_head = self._make_head(hidden_dim, 3)
-        else:
-            self.shs_head = self._make_head(hidden_dim, 3)
+            self.img_down = nn.Linear(768,hidden_dim)
 
         self.relu = nn.ReLU()
         self.softmax = nn.Softmax(dim=-1)
-        self.resample = nn.Linear(224*224,6890)
+
+        self.initialize_weights()
+
     
     def _make_head(self, hidden_dim, out_dim):
         layers = nn.Sequential(nn.Linear(hidden_dim, hidden_dim),
@@ -433,7 +518,7 @@ class UV_Transformer(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
+        if isinstance(m, nn.Linear) or isinstance(m, nn.Parameter):
             # we use xavier_uniform following official JAX ViT:
             torch.nn.init.xavier_uniform_(m.weight)
             if isinstance(m, nn.Linear) and m.bias is not None:
@@ -448,25 +533,66 @@ class UV_Transformer(nn.Module):
         
     def forward(self, x, img=None,cam=None,mask_ratio=0.0):
         mask = None
-        if self.dino :
-            with torch.no_grad():
-                if img.shape[-1]== 224:
+        if self.mode == 'uv':
+            if self.dino :
+                if not self.opt.dino_update:
+                    for param in self.dino_encoder.parameters():
+                        param.requires_grad = False
+                    self.dino_encoder.eval()
+                # else:
+                #     for param in self.dino_encoder.parameters():
+                #         param.requires_grad = True
+                # with torch.no_grad():
+                if self.opt.dino_interpolation:
                     inputs = self.processor(images=img, return_tensors="pt",do_resize=False,do_rescale=False,do_normalize=True).to(self.device)
+                    img_emb = self.dino_encoder(**inputs,interpolate_pos_encoding=self.opt.dino_interpolation)
                 else:
-                    inputs = self.processor(images=img, return_tensors="pt",do_resize=True,do_rescale=False,do_normalize=True).to(self.device)
-                img_emb = self.dino_encoder(**inputs)
+                    if img.shape[-1]== 224:
+                        inputs = self.processor(images=img, return_tensors="pt",do_resize=False,do_rescale=False,do_normalize=True).to(self.device)
+                    else:
+                        inputs = self.processor(images=img, return_tensors="pt",do_resize=True,do_rescale=False,do_normalize=True).to(self.device)
+                    img_emb = self.dino_encoder(**inputs)
                 img_emb = img_emb['last_hidden_state'][...,1:,:]
 
-            if self.camera_param:
-                assert cam is not None
-                cam_emb = self.cam_proj(cam.reshape(cam.shape[0],-1))[:,None,:]
-                emb = self.img_down(img_emb+ cam_emb)
+                if self.camera_param:
+                    assert cam is not None
+                    cam_emb = self.cam_proj(cam.reshape(cam.shape[0],-1))[:,None,:]
+                    emb = self.img_down(img_emb+ cam_emb)
+                else:
+                    if self.img_down is not None:
+                        emb = self.img_down(img_emb[0].unsqueeze(0))
+                    else:
+                        emb = img_emb
             else:
-                emb = self.img_down(img_emb[0].unsqueeze(0))
-        
-        bs = img.shape[0] if img is not None else x.shape[0]
+                assert self.opt.train_from_scratch is True
+                emb = self.patch_embed(img.permute((0,3,1,2)))
+            
+            bs = img.shape[0] if img is not None else x.shape[0]
+            img_token = emb.permute(1,0,2).clone()
+            if self.opt.uv_query:
+                x = emb.permute(1,0,2)
+                x = self.encoder(self.learned_uv_q.permute(1,0,2),x,query_pos=self.positional_emb_q.permute(1,0,2),pos=self.positional_emb.permute(1,0,2))
+                x = x.squeeze(0).permute(1,2,0)
+                x = self.upsampler(x)
+                x = x.view(224,224,-1)
+                features = x.clone()
 
-        if self.input_mode=='image+smpl':
+
+            else:
+
+                x= self.encoder(x,src_key_padding_mask=mask, pos=self.positional_emb.permute(1,0,2))
+                x = x.permute((1,2,0))
+                x = self.upsampler(x)
+                x = x.view(224,224,-1)
+                features = x.clone()
+
+            x = self.generator.resample(x).view((bs,-1,self.hidden_dim))
+            shs = self.shs_head(x)
+            return img_token,shs
+
+        else:
+           
+            img = self.img_down(img)
             theta = x[0]
             beta = x[1]
             theta = self.theta(theta)
@@ -478,31 +604,40 @@ class UV_Transformer(nn.Module):
             x = torch.cat((theta, beta),dim=1)
             if mask is not None:
                 x = self.masking(x, mask)
-            x = torch.cat((emb, x), dim=1)
-            x = x.permute(1,0,2)
-        else:  #image only do nothing
-            x = emb
-            x = x.permute(1,0,2)
+            x = torch.cat((img, x.permute(1,0,2)), dim=0)
+          
+            if self.opt.uv_query:
+                x = self.encoder(self.learned_uv_q.permute(1,0,2),x,query_pos=self.positional_emb_q.permute(1,0,2),pos=self.positional_emb.permute(1,0,2))
+                x = x.squeeze(0).permute((1,0,2))
+                features = x.clone()
+
+
+            else:
+
+                x= self.encoder(x,src_key_padding_mask=mask, pos=self.positional_emb.permute(1,0,2))
+                if self.input_mode != 'image':  
+                    x = x[:-2,...]
+                x = x.permute((1,2,0))
+                x = self.upsampler(x)
+                x = x.view(224,224,-1)
+                features = x.clone()
         
-        x= self.encoder(x,src_key_padding_mask=mask, pos=self.positional_emb.permute(1,0,2))
-        if self.input_mode != 'image':  
-            x = x[:-2,...]
-        x = x.permute((1,2,0))
-        x = self.upsampler(x)
-        x = x.view(224,224,-1)
-        features = x.clone()
-        x = self.generator.resample(x).view((bs,-1,self.hidden_dim)) 
-        
-        if self.input_mode == 'image+smpl':
-            means3D = self.mean3D_head(x)
             opacity = self.opacity_head(x).sigmoid()
-            shs = self.shs_head(x)
+            means3D = self.mean3D_head(x)
             rotations = F.normalize(self.rotations_head(x))
-            scales = self.scales_head(x).sigmoid()
-            return means3D, opacity, scales, shs, rotations,features
-        else:
-            shs = self.shs_head(x)
-            return  shs, features
+            
+            if self.opt.exp_scale:
+                scales = torch.exp(self.scales_head(x))
+                scales  = torch.clamp(scales, min=0, max=self.opt.clip_scaling)
+            else:
+                scales = self.scales_head(x).sigmoid()
+            
+            if self.opt.return_RT:
+                new_R = self.R_head(x).view((bs,-1,3,3))
+                new_T = self.T_head(x).view((bs,-1,3))
+                means3D = torch.matmul(means3D.unsqueeze(2),new_R).squeeze() + new_T
+            return means3D, opacity, scales, rotations
+        
 
 
     
@@ -536,3 +671,6 @@ class UV_Transformer(nn.Module):
         x[mask] = self.mask_token
 
         return x, mask, ids_restore
+    
+    
+    

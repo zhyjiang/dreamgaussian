@@ -1,3 +1,4 @@
+import pickle
 from torch.utils.data.dataset import Dataset
 import os
 import json
@@ -43,6 +44,8 @@ class ZJU(Dataset):
         self.multi_view = cfg.multi_view
         self.H = cfg.dataset.H
         self.W = cfg.dataset.W
+        self.smpl_driven_training = cfg.smpl_driven_training
+        self.fake_ratio = cfg.fake_ratio
         
         
         for i in range(len(self.camera_list)):
@@ -163,8 +166,8 @@ class ZJU(Dataset):
                     self.camera_params[cam_id]['T'].append(T)
                 else:
                     self.camera_params[cam_id]['Ks'].append(self.annots['K'][camera - 1])
-                    R = self.annots['R'][camera - 1].T
-                    T = self.annots['T'][camera - 1]/1000.0
+                    R = np.array(self.annots['R'][camera - 1]).T
+                    T = np.array(self.annots['T'][camera - 1])/1000.0
                     # RT = np.array([self.annots['RT']][camera - 1])
                     # RT = np.concatenate([self.annots['R'][camera - 1], 
                     #                 self.annots['T'][camera - 1]],
@@ -183,23 +186,30 @@ class ZJU(Dataset):
                     self.camera_params[cam_id]['R'].append(R)
                     self.camera_params[cam_id]['T'].append(T)
             
-                
-                
-                    # self.camera_params[cam_id]['RTs']=RT
-                # self.camera_params[cam_id]['RTs'].append(RT) 
-                
-            
             num_frame = len(os.listdir(os.path.join(sub_path, 'new_params')))
-
-            for fid in tqdm(range(num_frame)):
-                if self.path[i] in (313, 315):
-                    fid = fid + 1
-                # import ipdb;ipdb.set_trace()
-                self.smpl_params.append(np.load(os.path.join(sub_path, 'new_params', f'{fid}.npy'), allow_pickle=True).item())
-                vertices = np.load(os.path.join(sub_path, 'new_vertices', f'{fid}.npy'), allow_pickle=True)
-                vertices = np.concatenate([vertices, np.ones([vertices.shape[0], 1])], axis=-1)
-                self.vertices.append(vertices)
-             
+            # print(os.path.exists(os.path.join(sub_path, 'all_vertices.pkl')))
+            # import ipdb;ipdb.set_trace()
+            if os.path.exists(os.path.join(sub_path, 'all_vertices.pkl')):
+                self.smpl_params.append(pickle.load(open(os.path.join(sub_path, 'all_params.pkl'), 'rb')))
+                self.vertices.append(pickle.load(open(os.path.join(sub_path, 'all_vertices.pkl'), 'rb')))
+                # print(len(self.vertices))
+            else:
+                for fid in tqdm(range(num_frame)):
+                    if self.path[i] in (313, 315):
+                        fid = fid + 1
+                    # import ipdb;ipdb.set_trace()
+                    smpl_params  = np.load(os.path.join(sub_path, 'new_params', f'{fid}.npy'), allow_pickle=True).item()
+                    self.smpl_params.append(smpl_params)
+                    vertices = np.load(os.path.join(sub_path, 'new_vertices', f'{fid}.npy'), allow_pickle=True)
+                    vertices = np.concatenate([vertices, np.ones([vertices.shape[0], 1])], axis=-1)
+                    self.vertices.append(vertices)
+                pickle.dump(self.smpl_params, open(os.path.join(sub_path, 'all_params.pkl'), 'wb'))
+                pickle.dump(self.vertices, open(os.path.join(sub_path, 'all_vertices.pkl'), 'wb'))
+                
+        
+        self.vertices = np.concatenate(self.vertices,axis=0)
+        self.smpl_params = np.concatenate(self.smpl_params,axis=0)
+        
         try:
             assert len(self.camera_list)*len(self.image_path[0]) == len(self.camera_list)*len(self.mask_path[0]) == \
                 len(self.smpl_params)*len(self.camera_list)  == \
@@ -210,6 +220,10 @@ class ZJU(Dataset):
      
         self.vertices = np.array(self.vertices)
         self.image_path = np.array(self.image_path)
+        self.smpl_params = np.array(self.smpl_params)
+        if len(self.vertices.shape) > 3:
+            self.vertices = self.vertices[0]
+            self.smpl_params = self.smpl_params[0]
         self.mask_path = np.array(self.mask_path)
         self.camera_params = np.array(self.camera_params)
         
@@ -226,7 +240,7 @@ class ZJU(Dataset):
        
         w2c = np.stack([np.eye(4).astype(np.float32)]*len(self.camera_list))
         index = index * self.sample_rate
-        
+        # import ipdb;ipdb.set_trace()
         vertices = self.vertices[index % len(self.vertices)]
         smpl_param = self.smpl_params[index % len(self.vertices)]
         
@@ -255,6 +269,10 @@ class ZJU(Dataset):
         K = []
         R = []
         T = []
+        fake_image_list = []
+        
+        randnum = np.random.rand()
+        randseq = np.random.randint(self.image_path[0].shape[0])
 
         for i in range(len(self.camera_list)):
             
@@ -312,6 +330,11 @@ class ZJU(Dataset):
             v.append(temp_v)
             
             cur_image = Image.open(self.image_path[i][index])
+            fake_image = None
+            # import ipdb;ipdb.set_trace()
+            if self.smpl_driven_training and randnum < self.fake_ratio:
+                fake_image = Image.open(self.image_path[i][randseq])
+                fake_image = np.array(fake_image)/255
             # ori_image_list.append(np.array(cur_image))
     
             mask_image = Image.open(self.mask_path[i][index])
@@ -330,6 +353,8 @@ class ZJU(Dataset):
             #     mask_image = np.array(self.transform(mask_image))
             # else:
             mask_image = np.array(mask_image)
+            
+            
 
             
             
@@ -341,6 +366,8 @@ class ZJU(Dataset):
             cur_image *= mask_image[...,None]
             mask_list.append(mask_image)
             image_list.append(cur_image)
+            if fake_image is not None:
+                fake_image_list.append(fake_image)
             
             bound_mask,max_corner,min_corner = self.get_bound_2d_mask(world_bound, cur_K, w2c[:3],self.H ,self.W,return_corners=True)
             bound_mask = bound_mask.astype(np.float32)
@@ -384,6 +411,7 @@ class ZJU(Dataset):
             'fovy': np.array(fovy),
             'bound_mask': np.array(bound_mask_list),
             'corners': np.array(corners),
+            'fake': np.array(fake_image_list)
             # 'w2c': w2c,
         }
 

@@ -221,10 +221,14 @@ class VertexTransformer(nn.Module):
             else:
                 self.dino_encoder = torch.hub.load('facebookresearch/dino:main', self.dino.path).patch_embed.to(self.device)
 
-        # if self.dino_update:
-        #     self.dino_encoder.train()
-        # else:
-        #     self.dino_encoder.eval()
+        if self.dino_update:
+            self.dino_encoder.train()
+            for param in self.dino_encoder.parameters():
+                param.requires_grad = True
+        else:
+            self.dino_encoder.eval()
+            for param in self.dino_encoder.parameters():
+                param.requires_grad = False
 
         self.encoder = Transformer(hidden_dim, num_layers, nhead, dim_head, mlp_dim, cross=self.cross_attention,dropout=dropout)
         if self.opt.trans_decoder:

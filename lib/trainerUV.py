@@ -17,7 +17,7 @@ import rembg
 from lib.gs.gs_renderer import Renderer,Camera
 from kornia.losses.ssim import SSIMLoss, ssim_loss
 
-
+import copy
 from grid_put import mipmap_linear_grid_put_2d
 from lib.model.UV_GS import UV_GS
 from lib.dataset.ZJU import ZJU
@@ -50,8 +50,8 @@ class IoULoss(torch.nn.Module):
         loss = 1.0 - iou
 
         return loss
-def cosine_similarity(features,nearest_point,vts):
-    part_weight = np.load('part_weight.npy')
+def cosine_similarity(features,nearest_point,vts,part_weight):
+    
     k = nearest_point.shape[1]
     k_features = features[vts[nearest_point][:,:,0],vts[nearest_point][:,:,1]] # 7670, 5, d
     cur_features = features[vts[:,0],vts[:,1]].unsqueeze(1) # 7670, 1, d
@@ -153,18 +153,16 @@ class Trainer:
             self.data_config = self.opt.dataset
         else:
             self.data_config = self.opt.dataset2
-        # if self.opt.eval_only:   
         self.lpips = LPIPS()
-        # else:
-        #     self.lpips = None
+
         
         self.W = self.data_config.W
         self.H = self.data_config.H
         self.near = opt.near
         self.far = opt.far
         self.pretrain_path = opt.pretrain_path
-        os.makedirs(os.path.join('logs',self.opt.save_name),exist_ok=True)
-        self.write = SummaryWriter(os.path.join('logs',self.opt.save_name))
+        os.makedirs(os.path.join(self.opt.save_name),exist_ok=True)
+        self.write = SummaryWriter(os.path.join(self.opt.save_name))
         self.mode = "image"
         self.seed = "random"
 
@@ -176,8 +174,26 @@ class Trainer:
         self.nearest_point = torch.tensor(np.load('nearest_point.npy')).to(self.device)
         self.dimension = 3
         self.model = UV_GS(self.opt).to(self.device)
-        
+        self.nearest_point = torch.tensor(np.load('nearest_point.npy')).to(self.device)
+
+        # path = '/home/zhongyuj/GauHuman/output/zju_mocap_refine/pureCoreView_386/point_cloud/iteration_1200/point_cloud.ply'
+        # plydata = PlyData.read(path)
+
+        # # import ipdb;ipdb.set_trace()
+        # self.scales = torch.tensor(np.concatenate([plydata.elements[0]['scale_0'],plydata.elements[0]['scale_1'],plydata.elements[0]['scale_2']])).view((6890,3)).to(self.device).unsqueeze(0)
+        # self.rotations = torch.tensor(np.concatenate([plydata.elements[0]['rot_0'],plydata.elements[0]['rot_1'],plydata.elements[0]['rot_2'],plydata.elements[0]['rot_3']])).view((6890,4)).to(self.device).unsqueeze(0)
             
+        # self.shs = torch.tensor(np.load('/home/zhongyuj/dreamgaussian/fixed_scales.npy')).cuda()
+        
+        # vts = torch.tensor(self.model.generator.vts).to(self.device).float()
+        # self.nearest_point = self.knn(vts[:, None, :], vts, self.opt.k + 1)[0][:, :, 1:].squeeze(1)
+        # self.input_img_torch
+        # np.save(f'nearest_point_{self.opt.k}.npy',self.nearest_point.cpu().numpy())
+        # import ipdb;ipdb.set_trace()
+        
+        # import ipdb;ipdb.set_trace()
+
+        
 
 
             
@@ -186,7 +202,14 @@ class Trainer:
             
 
         if self.pretrain_path is not None:
-            self.model.load_state_dict(torch.load(self.pretrain_path))
+            # import ipdb;ipdb.set_trace()
+            ckpt = torch.load(self.pretrain_path)
+            # m = {k: v for k, v in ckpt.items() if 'shape_model' not in k}
+            # import ipdb;ipdb.set_trace()
+            self.model.load_state_dict(ckpt,strict=False)
+            # import ipdb;ipdb.set_trace()
+            
+            
             print(f'Loaded pretrained model from {self.pretrain_path}')
 
         # renderer
@@ -355,7 +378,8 @@ class Trainer:
         
         # self.model.to(self.device)
         
-        
+        self.scale_loss = torch.nn.MSELoss()
+        self.rotation_loss = torch.nn.MSELoss()
         
         if self.opt.loss.startswith('ssim'):
             subloss = self.opt.loss.split('_')[-1]
@@ -384,6 +408,7 @@ class Trainer:
         self.ssim_loss = ssim
         self.smooth_loss = cosine_similarity
         # self.smooth_loss = features_diff
+        self.part_weight = np.load('part_weight.npy')
         self.feature_loss = torch.nn.MSELoss()
         # self.IOU_loss = IoULoss()
      
@@ -401,6 +426,9 @@ class Trainer:
         
         with torch.no_grad():
             self.model.eval()
+            # self.opt.train_strategy = 'uv'
+            
+            self.init = True if self.opt.pretrain_uv else False
         
             
             for epoch in range(self.eval_steps):
@@ -427,33 +455,67 @@ class Trainer:
                         pose = smpl_params['poses'].float().to(self.device)
                         shape = smpl_params['shapes'].float().to(self.device)
                     
-                  
-                    if self.opt.multi_view == 1 and len(gt_images.shape) ==4  :
-                        temp_gt_images = gt_images[0].unsqueeze(0)
-                    else:
-                        temp_gt_images = gt_images[[x-1 for x in self.opt.dataset.test_camera_list]]
+                    bs = data['image'].shape[0]
+
+                    if self.opt.multi_view == 1 and len(gt_images.shape) == 4:
+                        if self.opt.crop_image:
+                            cur_corners = torch.clamp(corners[0],0,1024)
+                            
+                            temp_gt_images = gt_images[0][cur_corners[1][1]:cur_corners[0][1],cur_corners[1][0]:cur_corners[0][0]].unsqueeze(0)
+                            # import ipdb;ipdb.set_trace()
+                            # cv2.imwrite(os.path.join(self.opt.vis_path,f'{ite}_cropped.jpg'), temp_gt_images[0].cpu().numpy()*255.0)
+                        else:
+                            temp_gt_images = gt_images[0].unsqueeze(0)
                         
-                    if self.opt.param_input:
-                        means3D, opacity, scales, shs, rotations,features,_ = self.model((pose,shape),img=temp_gt_images,cam = None)
+                     # means3D, opacity, scales, shs, rotations,features,features_all = self.model(pose,shape,temp_gt_images,cam=None)
+                    if self.opt.train_strategy == 'uv':
+                        if self.opt.pretrain_uv:
+                            shs = self.model(pose,shape,temp_gt_images,cam=None,pretrain_uv=True)
+                        else:
+                            means3D, opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
                     else:
-                        means3D, opacity, scales, shs, rotations,features,_ = self.model(vertices,img=temp_gt_images,cam = None)
+                        means3D, opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
+                    if self.opt.train_strategy == 'uv':
+                        if self.init:
+                            means3D = torch.zeros((bs,6890,3)).to(self.device)
+                            # scales =  torch.mean(torch.exp(self.scales),dim=1).repeat(1,6890,1)
+                            scales = torch.ones((bs,6890,3)).to(self.device)*0.01
+                            opacity = torch.ones((bs,6890,1)).to(self.device)
+                            # scales = torch.exp(self.scales) 
+                            rotations = torch.zeros((bs,6890,4)).to(self.device)
+                            rotations[...,0] = 1 
+                            # rotations = torch.mean(F.normalize(self.rotations),dim=1).repeat(1,6890,1)
+                        else:
+                            scales  = scales * self.opt.scale_factor
+
+                            means3D = means3D * self.opt.means3D_scale
+                    
+                    else:
+                        # opacity = torch._like(opacity)
+                        scales  = scales * self.opt.scale_factor
+                        means3D = means3D * self.opt.means3D_scale
+                    
                     if self.opt.upsample != 1:
                         vertices = vertices.repeat( 1,self.opt.upsample, 1)
+                    if self.opt.triple_point:
+                        import ipdb;ipdb.set_trace()
+                        extra_points = self.model.generator.midpoints_to_v[:,0,:] @ vertices  #13776 , 3
+                        vertices = torch.concatenate([vertices,extra_points],dim=0)
                   
                     if self.opt.learned_scale:
                         scales = scales * self.model.model.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
-                    scales = scales*self.opt.scale_factor
-                    if ite == 0:
-                        plt.hist(scales[...,0].flatten().detach().cpu().numpy(),bins=10)
-                        plt.savefig(f'{self.opt.vis_ply_path}/scale_0.png')
-                        plt.close()
-                        plt.hist(scales[...,1].flatten().detach().cpu().numpy(),bins=10)
-                        plt.savefig(f'{self.opt.vis_ply_path}/scale_1.png')
-                        plt.close()
+                    
+                    # if ite == 0:
+                    #     plt.hist(scales[...,0].flatten().detach().cpu().numpy(),bins=10)
+                    #     plt.savefig(f'{self.opt.vis_ply_path}/scale_0.png')
+                    #     plt.close()
+                    #     plt.hist(scales[...,1].flatten().detach().cpu().numpy(),bins=10)
+                    #     plt.savefig(f'{self.opt.vis_ply_path}/scale_1.png')
+                    #     plt.close()
 
-                        plt.hist(scales[...,2].flatten().detach().cpu().numpy(),bins=10)
-                        plt.savefig(f'{self.opt.vis_ply_path}/scale_2.png')
-                        plt.close()
+                    #     plt.hist(scales[...,2].flatten().detach().cpu().numpy(),bins=10)
+                    #     plt.savefig(f'{self.opt.vis_ply_path}/scale_2.png')
+                    #     plt.close()
                     
 
                     for i in self.opt.dataset.test_camera_list:
@@ -462,22 +524,26 @@ class Trainer:
                             R = data['R'][idx],
                             T= data['T'][idx],
                             K= data['K'][idx],
-                            W=self.W,
-                            H=self.H,
+                            W=224 if self.opt.superresolution else self.W ,
+                            H=224 if self.opt.superresolution  else self.H,
                             FoVy = data['fovy'][idx],
                             FoVx = data['fovx'][idx],
                         )
                         bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
                         out = self.renderer.render(cam,
-                                                vertices[idx]+means3D[0],
-                                                opacity[0],
-                                                scales[0],
-                                                shs[0][:, None, :],
-                                                rotations[0],
-                                                bg_color=bg_color)
+                                            self.model.model.w@vertices[idx]+means3D[0] if self.opt.learned_w else vertices[idx]+means3D[0],
+                                            opacity[0],
+                                            scales[0],
+                                            shs[0][:, None, :],
+                                            rotations[0],
+                                            bg_color=bg_color)
                        
                         image = out["image"] # [1, 3, H, W] in [0, 1]
                         # depth = out['depth'].squeeze() # [H, W]
+                        # import ipdb;ipdb.set_trace()
+                        if self.opt.superresolution:
+                            image = self.model.model.superresolution(image)
+                            image = image.squeeze(0)
                         
                         np_img = image.detach().cpu().numpy()
                         np_img = np_img.transpose(1, 2, 0)
@@ -489,28 +555,28 @@ class Trainer:
                         #     cv2.imwrite(f'./vis_temp/{ite}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
                         # plt.imsave(os.path.join(self.opt.vis_eval_depth_path,f'{ite}.jpg'), depth_img)
                         # cv2.imwrite(os.path.join(self.opt.vis_eval,f'{ite}.jpg'), np.concatenate((target_img, np_img), axis=1) * 255)
-                        cv2.imwrite(f'{self.opt.vis_second_view}/{ite}_view{idx}.jpg', np.concatenate((target_img[...,::-1], np_img[...,::-1]), axis=1) * 255)
+                        cv2.imwrite(f'{self.opt.vis_novel_view}/{ite}_view{idx}.jpg', np.concatenate((target_img[...,::-1], np_img[...,::-1]), axis=1) * 255)
                         psnr_l.append(self.psnr_metric(np_img, target_img))
                         ssim_l.append(skimage.metrics.structural_similarity( target_img,np_img, multichannel=True,channel_axis=-1,data_range=1.0))  
                         if self.lpips is not None and (i in self.opt.dataset.test_camera_list[:]):
                             self.lpips.eval()
                             lpips_res.append(self.lpips(torch.tensor(np_img).permute(2,0,1), torch.tensor(target_img).permute(2,0,1)).item()) 
                             
-                        with torch.no_grad(): 
-                            shs_view = shs.detach().view(
-                                -1, 3, (0 + 1) ** 2
-                            )
-                            dir_pp = means3D - cam.camera_center.repeat(
-                                shs.shape[0], 1
-                            )
-                            dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
-                            sh2rgb = eval_sh(
-                                0, shs_view, dir_pp_normalized
-                            )
+                        # with torch.no_grad(): 
+                        #     shs_view = shs.detach().view(
+                        #         -1, 3, (0 + 1) ** 2
+                        #     )
+                        #     dir_pp = means3D - cam.camera_center.repeat(
+                        #         shs.shape[0], 1
+                        #     )
+                        #     dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+                        #     sh2rgb = eval_sh(
+                        #         0, shs_view, dir_pp_normalized
+                        #     )
                             
-                            colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
-                            uv_map = torch.zeros_like(gt_images[idx])
-                            self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='p')
+                        #     colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+                        #     uv_map = torch.zeros_like(gt_images[idx])
+                            # self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='point_only')
                 print('psnr_eval', np.array(psnr_l).mean())  
                 print('ssim_eval', np.array(ssim_l).mean()) 
                 print('lpips_eval',np.array(lpips_res).mean())    
@@ -521,9 +587,7 @@ class Trainer:
         os.makedirs(self.opt.vis_depth_path,exist_ok=True)
         
         
-        
         with torch.no_grad():
-            # self.model.eval()
             self.model.eval()
         
             
@@ -539,6 +603,13 @@ class Trainer:
                 for ite, data in enumerate(pbar):
                     vertices = data['vertices'].float().to(self.device)
                     gt_images = data['image'].view((-1,self.H,self.W,3)).float().to(self.device)
+                    
+                    if data['fake'] is not None and len(data['fake']) > 0: 
+                    
+                
+                        fake_images = data['fake'].float().to(self.device).view((-1,self.H,self.W,3))
+                    else:
+                        fake_images = None
                     vertices = vertices.view((-1,6890,3))
                     data['fovy'] = data['fovy'].view((-1))
                     data['fovx'] = data['fovx'].view((-1))
@@ -546,6 +617,7 @@ class Trainer:
                     data['T'] = data['T'].view((-1,1,3))
                     data['R'] = data['R'].view((-1,3,3))
                     corners = data['corners'].view((-1,2,2))
+                    bs = gt_images.shape[0]
                     
                     if self.opt.param_input:
                         smpl_params = data['smpl_param']
@@ -558,11 +630,40 @@ class Trainer:
                             cur_corners = torch.clamp(corners[0],0,1024)
                             temp_gt_images = gt_images[0][cur_corners[1][1]:cur_corners[0][1],cur_corners[1][0]:cur_corners[0][0]].unsqueeze(0)
                         else:
-                            temp_gt_images = gt_images[0].unsqueeze(0)
+                            if fake_images.shape[0] != 0  and self.opt.smpl_driven_training:
+                                temp_gt_images = fake_images[0].unsqueeze(0)
+                            else:
+                                temp_gt_images = gt_images[0].unsqueeze(0)
                             
                   
-                    means3D, opacity, scales, shs, rotations,features,features_all = self.model(pose,shape,temp_gt_images,cam=None)
-                    scales=scales*self.opt.scale_factor
+                    # means3D, opacity, scales, shs, rotations,features,features_all = self.model(pose,shape,temp_gt_images,cam=None)
+                    if self.opt.train_strategy == 'uv':
+                        if self.opt.pretrain_uv:
+                            shs = self.model(pose,shape,temp_gt_images,cam=None,pretrain_uv=True)
+                        else:
+                            means3D, opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
+                    else:
+                        means3D, opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
+
+                    if self.opt.train_strategy == 'uv':
+                        if self.init:
+                            means3D = torch.zeros((bs,6890,3)).to(self.device)
+                            scales = torch.ones((bs,6890,3)).to(self.device)*0.01
+                            opacity = torch.ones((bs,6890,1)).to(self.device)
+                            rotations = torch.zeros((bs,6890,4)).to(self.device)
+                            rotations[...,0] = 1 
+                        else:
+                            scales  = scales * self.opt.scale_factor
+                            means3D = means3D * self.opt.means3D_scale
+                    
+                    
+                    else:
+                        scales  = scales * self.opt.scale_factor
+                        means3D = means3D * self.opt.means3D_scale
+                        
+                    if self.opt.triple_point:
+                        extra_points = self.model.generator.midpoints_to_v[:,0,:] @ vertices  #13776 , 3
+                        vertices = torch.concatenate([vertices,extra_points],dim=1)
                 
                     if self.opt.learned_scale:
                         scales = scales * self.model.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
@@ -586,28 +687,34 @@ class Trainer:
                             R = data['R'][idx],
                             T= data['T'][idx],
                             K= data['K'][idx],
-                            W=self.W,
-                            H=self.H,
+                            W=224 if self.opt.superresolution else self.W ,
+                            H=224 if self.opt.superresolution  else self.H,
                             FoVy = data['fovy'][idx],
                             FoVx = data['fovx'][idx],
                         )
                         bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
                         
+
+                        
+
                         out = self.renderer.render(cam,
-                                                    vertices[idx]+means3D[0],
+                                                self.model.model.w@vertices[idx]+means3D[0] if self.opt.learned_w else vertices[idx]+means3D[0],
                                                 opacity[0],
                                                 scales[0],
                                                 shs[0][:, None, :],
                                                 rotations[0],
                                                 bg_color=bg_color)
                         image = out["image"] # [1, 3, H, W] in [0, 1]
+                        if self.opt.superresolution:
+                            image = self.model.model.superresolution(image)
+                            image = image.squeeze(0)
                         depth = out['depth'].squeeze() # [H, W]
                         
                         np_img = image.detach().cpu().numpy()
                         np_img = np_img.transpose(1, 2, 0)
                         
                         target_img = gt_images[idx].cpu().numpy()
-                        cv2.imwrite(f'{self.opt.vis_second_view}/{ite}_view{idx}.jpg', np.concatenate((target_img, np_img), axis=1) * 255)
+                        plt.imsave(f'{self.opt.vis_novel_view}/{ite}_view{idx}.jpg', np.concatenate((target_img, np_img), axis=1) )
                         psnr_l.append(self.psnr_metric(np_img, target_img))
                         ssim_l.append(skimage.metrics.structural_similarity( target_img,np_img, multichannel=True,channel_axis=-1,data_range=1.0))   
 
@@ -626,22 +733,42 @@ class Trainer:
         starter = torch.cuda.Event(enable_timing=True)
         ender = torch.cuda.Event(enable_timing=True)
         starter.record()
+        self.init = True if self.opt.pretrain_uv else False
         
         linear_schedule = torch.arange(0.1,0,-0.01)
-       
-        
+        if not self.opt.train_strategy == 'both':
+            if ep % self.opt.switch_epoch == 0:
+                if self.opt.train_strategy == 'uv' :
+                    self.opt.train_strategy = 'shape'
+                    self.model.freeze(self.model.uv_model)
+                    self.model.activate(self.model.shape_model)
+
+                else:
+                    self.opt.train_strategy = 'uv'
+                    self.model.activate(self.model.uv_model)
+                    if not self.opt.pretrain_uv:
+                        self.model.freeze(self.model.shape_model)
+        else:
+            self.model.activate(self.model.uv_model)
+            self.model.activate(self.model.shape_model)
+
+            
         world_vertex = {}
         for epoch in range(self.train_steps):
             
             os.makedirs(self.opt.vis_path,exist_ok=True)
             os.makedirs(self.opt.vis_depth_path,exist_ok=True)
-            os.makedirs(self.opt.vis_second_view,exist_ok=True)
+            os.makedirs(self.opt.vis_novel_view,exist_ok=True)
             print(self.optimizer.param_groups[0]['lr'])
             self.model.train()
 
             self.step += 1
             step_ratio = min(1, self.step / self.opt.iters)
             overall_loss= 0
+            overall_image_loss =0 
+            overall_mask_loss =0 
+            overall_ssim_loss =0 
+            
           
             # update lr
             pbar = tqdm.tqdm(self.dataloader)
@@ -662,6 +789,13 @@ class Trainer:
 
                 gt_images = data['image'].float().to(self.device).view((-1,self.H,self.W,3))
                 
+                if data['fake'] is not None and len(data['fake']) > 0: 
+                    
+                
+                    fake_images = data['fake'].float().to(self.device).view((-1,self.H,self.W,3))
+                else:
+                    fake_images = None
+                
                 mask = data['mask'].float().to(self.device).view((-1,self.H,self.W))
                 bound_mask = data['bound_mask'].float().to(self.device).view((-1,self.H,self.W))
                 vertices = vertices.view((-1,6890,3))
@@ -678,38 +812,70 @@ class Trainer:
                 
                 bs = data['image'].shape[0]
                 
+                train_camera_set = copy.copy(self.opt.dataset.train_camera_list)
+                
+
+                rand_view = 0
                 if self.opt.multi_view == 1 and len(gt_images.shape) == 4:
                     if self.opt.crop_image:
                         cur_corners = torch.clamp(corners[0],0,1024)
-                        
-                        temp_gt_images = gt_images[0][cur_corners[1][1]:cur_corners[0][1],cur_corners[1][0]:cur_corners[0][0]].unsqueeze(0)
-                        # import ipdb;ipdb.set_trace()
-                        # cv2.imwrite(os.path.join(self.opt.vis_path,f'{ite}_cropped.jpg'), temp_gt_images[0].cpu().numpy()*255.0)
+                        temp_gt_images = gt_images[rand_view][cur_corners[1][1]:cur_corners[0][1],cur_corners[1][0]:cur_corners[0][0]].unsqueeze(0)
                     else:
-                        temp_gt_images = gt_images[0].unsqueeze(0)
-                means3D, opacity, scales, shs, rotations,features,features_all = self.model(pose,shape,temp_gt_images,cam=None)
+                        if fake_images.shape[0] != 0  and self.opt.smpl_driven_training:
+                            temp_gt_images = fake_images[rand_view].unsqueeze(0)
+                        else:
+                            temp_gt_images = gt_images[rand_view].unsqueeze(0)
+                            
+                if self.opt.train_strategy == 'uv':
+                    if self.opt.pretrain_uv:
+                        shs = self.model(pose,shape,temp_gt_images,cam=None,pretrain_uv=True)
+                    else:
+                        means3D, opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
 
-                scales  = scales * self.opt.scale_factor
+                else:
+                    means3D, opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
+
+ 
+                if self.opt.triple_point:
+                    extra_points = self.model.generator.midpoints_to_v[:,0,:] @ vertices  #13776 , 3
+                    vertices = torch.concatenate([vertices,extra_points],dim=1)
+                
+                
+                if self.opt.train_strategy == 'uv':
+                    if self.init:
+                        means3D = torch.zeros((bs,6890,3)).to(self.device)
+                        scales = torch.ones((bs,6890,3)).to(self.device)*0.01
+                        opacity = torch.ones((bs,6890,1)).to(self.device)
+                        rotations = torch.zeros((bs,6890,4)).to(self.device)
+                        rotations[...,0] = 1 
+                    else:
+                        scales  = scales * self.opt.scale_factor
+
+                        means3D = means3D * self.opt.means3D_scale
                     
+                    
+                else:
+                    scales  = scales * self.opt.scale_factor
+                    means3D = means3D * self.opt.means3D_scale
                 if self.opt.learned_scale:
                     scales = scales * self.model.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
              
-                for i in self.opt.dataset.train_camera_list:  
+                for i in train_camera_set:  
 
                     idx = i-1
                     cam = Camera(
                         R = data['R'][idx],
                         T= data['T'][idx],
                         K= data['K'][idx],
-                        W=self.W,
-                        H=self.H,
+                        W=224 if self.opt.superresolution else self.W ,
+                        H=224 if self.opt.superresolution  else self.H,
                         FoVy = data['fovy'][idx],
                         FoVx = data['fovx'][idx],
                     )
 
                     bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
                     out = self.renderer.render(cam,
-                                            vertices[idx]+means3D[0],
+                                            self.model.model.w@vertices[idx]+means3D[0] if self.opt.learned_w else vertices[idx]+means3D[0],
                                             opacity[0],
                                             scales[0],
                                             shs[0][:, None, :],
@@ -718,29 +884,49 @@ class Trainer:
                         
                    
                     image = out["image"] # [1, 3, H, W] in [0, 1]
+                    if self.opt.superresolution:
+                        image = self.model.model.superresolution(image)
+                        image = image.squeeze(0)
+
                     msk = out['alpha']
-                    depth = out['depth'].squeeze() # [H, W]
-                    loss = loss + self.reg_loss(means3D[0], torch.zeros_like(means3D[0])) * self.opt.smpl_reg_scale
-                    loss = loss + self.mask_loss(msk[0][bound_mask[idx]==1],mask[idx][bound_mask[idx]==1]) * self.opt.mask_weight
-                    # loss = loss + (5.0-(self.smooth_loss(features,self.nearest_point,self.model.generator.vts) / self.nearest_point.shape[0]))* self.opt.similarity_score_weight
-                    loss = loss + self.reconstruct_loss(image.permute((1,2,0))[bound_mask[idx]==1,:], gt_images[idx][bound_mask[idx]==1,:])
+                    
+                    if self.opt.train_strategy != 'uv':
+                        loss = loss + self.reg_loss(means3D[0], torch.zeros_like(means3D[0])) * self.opt.smpl_reg_scale
+                    mask_loss = self.mask_loss(msk[0][bound_mask[idx]==1],mask[idx][bound_mask[idx]==1]) * self.opt.mask_weight
+                    loss = loss + mask_loss
+                    
+                    if self.opt.scale_loss:
+                        loss = loss + self.scale_loss(torch.std(scales,dim=-1), torch.zeros_like(torch.std(scales,dim=-1))) * self.opt.scale_constrain_weight
+                    overall_mask_loss += mask_loss.item()
+                    
+                    image_loss = self.reconstruct_loss(image.permute((1,2,0))[bound_mask[idx]==1,:], gt_images[idx][bound_mask[idx]==1,:])
+                    # loss = loss + (5.0-(self.smooth_loss(features,self.nearest_point,self.model.generator.vts,self.part_weight) / self.nearest_point.shape[0]))* self.opt.similarity_score_weight
+                    loss = loss + image_loss
+                    overall_image_loss += image_loss.item()
                     
                     x, y, w, h = cv2.boundingRect(bound_mask[idx].cpu().numpy().astype(np.uint8))
                     img_pred = image[:, y:y + h, x:x + w].unsqueeze(0)
                     img_gt = gt_images[idx][ y:y + h, x:x + w,:].unsqueeze(0).permute((0,3,1,2))
-                    loss = loss + (1.0 - self.ssim_loss(img_pred,img_gt))*self.opt.ssim_weight
-                  
+                    if not self.opt.dino_interpolation:
+                        ssim_loss =  (1.0 - self.ssim_loss(img_pred,img_gt))*self.opt.ssim_weight
+                        overall_ssim_loss += ssim_loss.item()
+                        loss = loss + ssim_loss
                     
-                    if ite % 50 == 0 :
+                   
+                    
+                    if ite % 30 == 0 or ite == 1:
                         np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy()
-                        cv2.imwrite(os.path.join(self.opt.vis_path,f'{ite}_view{idx}.jpg'), np.concatenate((target_img, np_img), axis=1)*255.0)
-                        plt.imsave(os.path.join(self.opt.vis_path,f'{ite}_bound_mask{idx}.jpg'), bound_mask[idx].detach().cpu().numpy()*255.0)
+                        
+                        plt.imsave(os.path.join(self.opt.vis_path,f'{ite}_view{idx}.jpg'), np.concatenate((target_img, np_img), axis=1))
 
                     if ep % 10 == 0 and ite%100 == 0:
-                        with torch.no_grad():
-                            self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[0],opacity[0],scales[0],rotations[0],shs[0],ite)
-                            
+                        try:
+                            with torch.no_grad():
+                                self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[0],opacity[0],scales[0],rotations[0],shs[0],ite,ep=ep)
+                        except:
+                            pass 
+                        try:
                             if i == self.opt.dataset.train_camera_list[0]:
                                 shs_view = shs.detach().view(
                                     -1, 3, (0 + 1) ** 2
@@ -755,7 +941,14 @@ class Trainer:
                                 
                                 colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
                                 uv_map = torch.zeros_like(gt_images[idx])
-                                self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path)             
+                                self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='point_only')   
+                                self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='p')             
+                        
+                        except:
+                            pass 
+                          
+                                
+          
                 pbar.set_postfix({'Loss': f'{loss.item():.5f}', 
                                   'DB': f'{scales.mean().item():.5f}','var': f'{scales.var().item():.5f}'})
               
@@ -767,6 +960,9 @@ class Trainer:
             self.opt.smpl_reg_scale *= 0.7
             self.scheduler.step()
             self.write.add_scalar('Train/Loss Epoch', overall_loss/(len(self.dataloader)*len(data['R'])), global_step=ep) 
+            self.write.add_scalar('SSIM Train/Loss Epoch', overall_ssim_loss/(len(self.dataloader)*len(data['R'])), global_step=ep) 
+            self.write.add_scalar('Image Train/Loss Epoch', overall_image_loss/(len(self.dataloader)*len(data['R'])), global_step=ep) 
+            self.write.add_scalar('MASK Train/Loss Epoch', overall_mask_loss/(len(self.dataloader)*len(data['R'])), global_step=ep) 
             
                 
 
@@ -802,7 +998,7 @@ class Trainer:
     def inverse_sigmoid(self,x):
         return np.log(x/(1-x))
         
-    def save_ply(self, path, xyz, opacity, scale, rotation, color, idx):
+    def save_ply(self, path, xyz, opacity, scale, rotation, color, idx,ep=None):
         os.makedirs(path,exist_ok=True)
         xyz = xyz.detach().cpu().numpy()
         normals = np.zeros_like(xyz)
@@ -818,16 +1014,23 @@ class Trainer:
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
         
-
-        attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), np.log(scale),rotation), axis=1)
+        # import ipdb;ipdb.set_trace()
+        if self.opt.exp_scale:
+            attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), self.inverse_sigmoid(scale),rotation), axis=1)
+        else:
+            attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), np.log(scale),rotation), axis=1)
+            
         
 
    
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         # print(f'ply saved in {path}')
-
-        PlyData([el]).write(os.path.join(path,f'{idx}.ply'))
+        if ep is not None:
+            PlyData([el]).write(os.path.join(path,f'epoch_{ep}_{idx}.ply'))
+        else:
+            
+            PlyData([el]).write(os.path.join(path,f'{idx}.ply'))
 
     @torch.no_grad()
     def test_step(self):
@@ -1441,12 +1644,30 @@ class Trainer:
                
                 if i % self.opt.save_interval == 0:
                     # self.save_model(mode='model')
-                    os.makedirs(f'./checkpoints/{self.opt.save_path}/',exist_ok=True)
-                    os.makedirs(f'./checkpoints/{self.opt.save_path}/{self.opt.save_name}',exist_ok=True)
-                    with torch.no_grad():
-                        torch.save(self.model.state_dict(), f'./checkpoints/{self.opt.save_path}/{self.opt.save_name}/epoch{i}.pth')
+                    # os.makedirs(f'./checkpoints/{self.opt.save_path}/',exist_ok=True)
+                    # os.makedirs(f'./checkpoints/{self.opt.save_path}/{self.opt.save_name}',exist_ok=True)
+                    os.makedirs(f'{self.opt.save_path}/',exist_ok=True)
+                    os.makedirs(f'{self.opt.save_path}/{self.opt.save_name}',exist_ok=True)
+                    try:
+                        with torch.no_grad():
+                            # torch.save(self.model.state_dict(), f'./checkpoints/{self.opt.save_path}/{self.opt.save_name}/epoch{i}.pth')
+                            torch.save(self.model.state_dict(), f'{self.opt.save_path}/{self.opt.save_name}/epoch{i}.pth')
+                            
+                    except:
+                        pass
         self.write.close()
             # do a last prune
             # self.renderer.gaussians.prune(min_opacity=0.01, extent=1, max_screen_size=1)
         # save
+
+
+    def knn(self,query_points, data_points, k=1):
+
+        # Compute pairwise distances between query points and data points
+        distances = torch.cdist(query_points, data_points)
+        
+        # Find the k nearest neighbors
+        distances, indices = torch.topk(distances, k, largest=False)
+        
+        return indices, distances
     
