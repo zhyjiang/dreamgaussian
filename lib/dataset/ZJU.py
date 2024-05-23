@@ -13,6 +13,8 @@ import copy
 import math
 from torchvision import transforms
 from PIL import Image
+from scipy.spatial import KDTree
+import torch
 
 
 class ZJU(Dataset):
@@ -235,6 +237,15 @@ class ZJU(Dataset):
         maxx,maxy = np.max(non_zero_pixels, axis=1)
       
         return (maxx,maxy,minx,miny)
+    
+
+
+    def distCUDA2(self,points):
+        points_np = points
+        dists, inds = KDTree(points_np).query(points_np, k=4)
+        meanDists = (dists[:, 1:] ** 2).mean(1)
+
+        return meanDists
 
     def __getitem__(self, index):
        
@@ -266,6 +277,8 @@ class ZJU(Dataset):
         fovx = []
         fovy = []
         v = []
+        s = []
+        r = []
         K = []
         R = []
         T = []
@@ -279,6 +292,16 @@ class ZJU(Dataset):
             # if self.multi_view > 1:
             
             temp_v = vertices
+            
+            
+            # import ipdb;ipdb.set_trace()
+            dist2 = np.clip(self.distCUDA2(temp_v), a_min=0.0000001,a_max=None)
+            # import ipdb;ipdb.set_trace()
+            scales = np.repeat(np.sqrt(dist2)[...,None],3,axis=1)
+            rotations = np.zeros((6890,4))
+            rotations[...,0] = 1
+            s.append(scales)
+            r.append(rotations)
             
             cur_R = self.camera_params[i]['R'][self.seqid[index]]
             cur_T = self.camera_params[i]['T'][self.seqid[index]]
@@ -405,13 +428,15 @@ class ZJU(Dataset):
             'K': np.array(K),
             'R': np.array(R),
             'T': np.array(T),
+            'scale':np.array(s),
             'image_path': self.image_path[0][index],
             'smpl_param': smpl_param,
             'fovx': np.array(fovx),
             'fovy': np.array(fovy),
             'bound_mask': np.array(bound_mask_list),
             'corners': np.array(corners),
-            'fake': np.array(fake_image_list)
+            'fake': np.array(fake_image_list),
+            'rotations': np.array(r)
             # 'w2c': w2c,
         }
 

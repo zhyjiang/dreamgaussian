@@ -484,16 +484,34 @@ class UV_Transformer(nn.Module):
                                     nn.Dropout(0.1),
                                     nn.Linear(self.img_channel, 224*224))
             
-            self.resample = nn.Linear(224*224,6890)
+            # self.resample = nn.Linear(224*224,6890)
+            if not self.opt.uv_map_224:
+                self.conv1 = nn.ConvTranspose2d(
+                    in_channels=hidden_dim,        # Input channels (RGB image)
+                    out_channels=hidden_dim,      # Output channels
+                    kernel_size=4,        # Kernel size
+                    stride=2,             # Stride
+                    padding=1             # Padding
+                )
+                # Activation function
+
+                # Second transposed convolution layer
+                # self.conv2 = nn.ConvTranspose2d(
+                #     in_channels=hidden_dim,       # Input channels from previous layer
+                #     out_channels=hidden_dim,       # Output channels (RGB image)
+                #     kernel_size=2,        # Kernel size
+                #     stride=1,             # Stride
+                #     padding=1             # Padding
+                # )
 
             self.shs_head = self._make_head(hidden_dim, 3)
+            
             self.img_down = None
         else:
 
             self.mean3D_head = self._make_head(hidden_dim, 3)
-            self.opacity_head = self._make_head(hidden_dim, 1)
-            self.shs_head = self._make_head(hidden_dim, 3)
             self.rotations_head = self._make_head(hidden_dim, 4)
+            self.opacity_head = self._make_head(hidden_dim, 1)
             self.scales_head = self._make_head(hidden_dim, 3)
             self.img_down = nn.Linear(768,hidden_dim)
 
@@ -585,9 +603,26 @@ class UV_Transformer(nn.Module):
                 x = self.upsampler(x)
                 x = x.view(224,224,-1)
                 features = x.clone()
+            # import ipdb;ipdb.set_trace()
+            if not self.opt.uv_map_224:
+                x = x.unsqueeze(0).permute((0,3,1,2))
+                
+                x = self.conv1(x)
+                x = self.relu(x)
+                x = x.squeeze(0).permute((1,2,0))
+                
+                # x = self.conv2(x)
+                # x = self.relu(x)
+
+            # import ipdb;ipdb.set_trace()
 
             x = self.generator.resample(x).view((bs,-1,self.hidden_dim))
+            # import ipdb;ipdb.set_trace()
+            
+
+
             shs = self.shs_head(x)
+
             return img_token,shs
 
         else:
@@ -622,13 +657,13 @@ class UV_Transformer(nn.Module):
                 x = x.view(224,224,-1)
                 features = x.clone()
         
-            opacity = self.opacity_head(x).sigmoid()
             means3D = self.mean3D_head(x)
+            opacity = self.opacity_head(x).sigmoid()
             rotations = F.normalize(self.rotations_head(x))
             
             if self.opt.exp_scale:
                 scales = torch.exp(self.scales_head(x))
-                scales  = torch.clamp(scales, min=0, max=self.opt.clip_scaling)
+                # scales  = torch.clamp(scales, min=0, max=self.opt.clip_scaling)
             else:
                 scales = self.scales_head(x).sigmoid()
             
@@ -636,7 +671,7 @@ class UV_Transformer(nn.Module):
                 new_R = self.R_head(x).view((bs,-1,3,3))
                 new_T = self.T_head(x).view((bs,-1,3))
                 means3D = torch.matmul(means3D.unsqueeze(2),new_R).squeeze() + new_T
-            return means3D, opacity, scales, rotations
+            return means3D, opacity,scales, rotations
         
 
 
