@@ -93,7 +93,7 @@ class UV_GS(nn.Module):
         self.opt = opt
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
         self.generator = UV_Map_Generator(
-            UV_height=224,
+            UV_height=224 if self.opt.uv_map_224 else 448,
             UV_pickle='template.pickle'
         )
 
@@ -167,7 +167,7 @@ class UV_GS(nn.Module):
                 img_token,shs = self.uv_model((pose,shape),img=x,cam = None)
                 
                 
-                means3D, opacity, scales, rotations = self.shape_model((pose,shape),img=img_token,cam = None)
+                means3D, opacity,scales, rotations = self.shape_model((pose,shape),img=img_token,cam = None)
 
                 return means3D, opacity, scales,shs, rotations
                 

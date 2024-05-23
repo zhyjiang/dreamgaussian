@@ -320,6 +320,9 @@ class Trainer:
         else:
             return self.opt.lr 
         
+    def weight_warmup(self,epoch):
+        return self.opt.scale_constrain_weight-(epoch*(7)/200)
+        
 
     
 
@@ -440,6 +443,8 @@ class Trainer:
                 for ite, data in enumerate(pbar):
                     vertices = data['vertices'].float().to(self.device)
                     gt_images = data['image'].view((-1,self.H,self.W,3)).float().to(self.device)
+                    init_scales = data['scale'].float().to(self.device)
+                    
                     
                     
                     vertices = vertices.view((-1,6890,3))
@@ -448,6 +453,9 @@ class Trainer:
                     data['K'] = data['K'].view((-1,3,3))
                     data['T'] = data['T'].view((-1,1,3))
                     data['R'] = data['R'].view((-1,3,3))
+                    init_scales = init_scales.view((-1,6890,3))
+
+                    
                     
 
                     if self.opt.param_input:
@@ -533,7 +541,7 @@ class Trainer:
                         out = self.renderer.render(cam,
                                             self.model.model.w@vertices[idx]+means3D[0] if self.opt.learned_w else vertices[idx]+means3D[0],
                                             opacity[0],
-                                            scales[0],
+                                            init_scales[idx]+scales[0],
                                             shs[0][:, None, :],
                                             rotations[0],
                                             bg_color=bg_color)
@@ -562,21 +570,22 @@ class Trainer:
                             self.lpips.eval()
                             lpips_res.append(self.lpips(torch.tensor(np_img).permute(2,0,1), torch.tensor(target_img).permute(2,0,1)).item()) 
                             
-                        # with torch.no_grad(): 
-                        #     shs_view = shs.detach().view(
-                        #         -1, 3, (0 + 1) ** 2
-                        #     )
-                        #     dir_pp = means3D - cam.camera_center.repeat(
-                        #         shs.shape[0], 1
-                        #     )
-                        #     dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
-                        #     sh2rgb = eval_sh(
-                        #         0, shs_view, dir_pp_normalized
-                        #     )
+                        with torch.no_grad(): 
+                            shs_view = shs.detach().view(
+                                -1, 3, (0 + 1) ** 2
+                            )
+                            dir_pp = vertices[idx]+means3D - cam.camera_center.repeat(
+                                shs.shape[0], 1
+                            )
+                            dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+                            sh2rgb = eval_sh(
+                                0, shs_view, dir_pp_normalized
+                            )
                             
-                        #     colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
-                        #     uv_map = torch.zeros_like(gt_images[idx])
-                            # self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='point_only')
+                            colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+                            uv_map = torch.zeros_like(gt_images[idx])
+                            # import ipdb;ipdb.set_trace()
+                            self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='whole')            
                 print('psnr_eval', np.array(psnr_l).mean())  
                 print('ssim_eval', np.array(ssim_l).mean()) 
                 print('lpips_eval',np.array(lpips_res).mean())    
@@ -602,6 +611,8 @@ class Trainer:
                 pbar = tqdm.tqdm(self.testloader)
                 for ite, data in enumerate(pbar):
                     vertices = data['vertices'].float().to(self.device)
+                    init_scales = data['scale'].float().to(self.device)
+                    init_rotations = data['rotations'].float().to(self.device)
                     gt_images = data['image'].view((-1,self.H,self.W,3)).float().to(self.device)
                     
                     if data['fake'] is not None and len(data['fake']) > 0: 
@@ -611,6 +622,8 @@ class Trainer:
                     else:
                         fake_images = None
                     vertices = vertices.view((-1,6890,3))
+                    init_scales = init_scales.view((-1,6890,3))
+                    init_rotations = init_rotations.view((-1,6890,4))
                     data['fovy'] = data['fovy'].view((-1))
                     data['fovx'] = data['fovx'].view((-1))
                     data['K'] = data['K'].view((-1,3,3))
@@ -630,10 +643,8 @@ class Trainer:
                             cur_corners = torch.clamp(corners[0],0,1024)
                             temp_gt_images = gt_images[0][cur_corners[1][1]:cur_corners[0][1],cur_corners[1][0]:cur_corners[0][0]].unsqueeze(0)
                         else:
-                            if fake_images.shape[0] != 0  and self.opt.smpl_driven_training:
-                                temp_gt_images = fake_images[0].unsqueeze(0)
-                            else:
-                                temp_gt_images = gt_images[0].unsqueeze(0)
+                            
+                            temp_gt_images = gt_images[0].unsqueeze(0)
                             
                   
                     # means3D, opacity, scales, shs, rotations,features,features_all = self.model(pose,shape,temp_gt_images,cam=None)
@@ -644,6 +655,7 @@ class Trainer:
                             means3D, opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
                     else:
                         means3D, opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
+                        
 
                     if self.opt.train_strategy == 'uv':
                         if self.init:
@@ -660,6 +672,10 @@ class Trainer:
                     else:
                         scales  = scales * self.opt.scale_factor
                         means3D = means3D * self.opt.means3D_scale
+                        
+                    # opacity = 0.1*torch.ones(opacity)
+                    # opacity = 0.1*torch.ones((means3D.shape[0],means3D.shape[1],1))
+                    
                         
                     if self.opt.triple_point:
                         extra_points = self.model.generator.midpoints_to_v[:,0,:] @ vertices  #13776 , 3
@@ -700,7 +716,7 @@ class Trainer:
                         out = self.renderer.render(cam,
                                                 self.model.model.w@vertices[idx]+means3D[0] if self.opt.learned_w else vertices[idx]+means3D[0],
                                                 opacity[0],
-                                                scales[0],
+                                                init_scales[idx]+scales[0],
                                                 shs[0][:, None, :],
                                                 rotations[0],
                                                 bg_color=bg_color)
@@ -721,6 +737,25 @@ class Trainer:
                         if self.lpips is not None and i in self.opt.dataset.test_camera_list[:3]:
                             self.lpips.eval()
                             lpips_res.append(self.lpips(torch.tensor(np_img).permute(2,0,1), torch.tensor(target_img).permute(2,0,1)).item())
+                        
+                        # with torch.no_grad(): 
+                        #     shs_view = shs.detach().view(
+                        #         -1, 3, (0 + 1) ** 2
+                        #     )
+                        #     dir_pp = vertices[idx]+means3D - cam.camera_center.repeat(
+                        #         shs.shape[0], 1
+                        #     )
+                        #     dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+                        #     sh2rgb = eval_sh(
+                        #         0, shs_view, dir_pp_normalized
+                        #     )
+                            
+                        #     colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+                        #     uv_map = torch.zeros_like(gt_images[idx])
+                            
+                        #     import ipdb;ipdb.set_trace()
+                        #     self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='pixel_only')            
+                        #     self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='whole')            
                 self.write.add_scalar('psnr_eval', np.array(psnr_l).mean(),global_step=ep)        
                 self.write.add_scalar('ssim_eval', np.array(ssim_l).mean(),global_step=ep)
                 if self.lpips is not None:
@@ -736,21 +771,21 @@ class Trainer:
         self.init = True if self.opt.pretrain_uv else False
         
         linear_schedule = torch.arange(0.1,0,-0.01)
-        if not self.opt.train_strategy == 'both':
-            if ep % self.opt.switch_epoch == 0:
-                if self.opt.train_strategy == 'uv' :
-                    self.opt.train_strategy = 'shape'
-                    self.model.freeze(self.model.uv_model)
-                    self.model.activate(self.model.shape_model)
+        # if not self.opt.train_strategy == 'both':
+        #     if ep % self.opt.switch_epoch == 0:
+        #         if self.opt.train_strategy == 'uv' :
+        #             self.opt.train_strategy = 'shape'
+        #             self.model.freeze(self.model.uv_model)
+        #             self.model.activate(self.model.shape_model)
 
-                else:
-                    self.opt.train_strategy = 'uv'
-                    self.model.activate(self.model.uv_model)
-                    if not self.opt.pretrain_uv:
-                        self.model.freeze(self.model.shape_model)
-        else:
-            self.model.activate(self.model.uv_model)
-            self.model.activate(self.model.shape_model)
+        #         else:
+        #             self.opt.train_strategy = 'uv'
+        #             self.model.activate(self.model.uv_model)
+        #             if not self.opt.pretrain_uv:
+        #                 self.model.freeze(self.model.shape_model)
+        # else:
+        #     self.model.activate(self.model.uv_model)
+        #     self.model.activate(self.model.shape_model)
 
             
         world_vertex = {}
@@ -780,6 +815,8 @@ class Trainer:
                 image_name = data['image_path']
                 
                 vertices = data['vertices'].float().to(self.device)
+                init_scales = data['scale'].float().to(self.device)
+                init_rotations = data['rotations'].float().to(self.device)
                 
                 if 'smpl_param' in data.keys():
                 
@@ -799,6 +836,8 @@ class Trainer:
                 mask = data['mask'].float().to(self.device).view((-1,self.H,self.W))
                 bound_mask = data['bound_mask'].float().to(self.device).view((-1,self.H,self.W))
                 vertices = vertices.view((-1,6890,3))
+                init_scales = init_scales.view((-1,6890,3))
+                init_rotations = init_rotations.view((-1,6890,4))
                 corners = data['corners'].view((-1,2,2))
                
                 data['K'] = data['K'].view((-1,3,3))
@@ -827,13 +866,16 @@ class Trainer:
                             temp_gt_images = gt_images[rand_view].unsqueeze(0)
                             
                 if self.opt.train_strategy == 'uv':
+                    self.model.freeze(self.model.shape_model)
+                    self.model.activate(self.model.uv_model)
                     if self.opt.pretrain_uv:
                         shs = self.model(pose,shape,temp_gt_images,cam=None,pretrain_uv=True)
                     else:
                         means3D, opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
 
                 else:
-                    means3D, opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
+                    means3D,opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
+                    
 
  
                 if self.opt.triple_point:
@@ -857,6 +899,8 @@ class Trainer:
                 else:
                     scales  = scales * self.opt.scale_factor
                     means3D = means3D * self.opt.means3D_scale
+                    
+
                 if self.opt.learned_scale:
                     scales = scales * self.model.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
              
@@ -874,10 +918,12 @@ class Trainer:
                     )
 
                     bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
+                    # import ipdb;ipdb.set_trace()
                     out = self.renderer.render(cam,
                                             self.model.model.w@vertices[idx]+means3D[0] if self.opt.learned_w else vertices[idx]+means3D[0],
                                             opacity[0],
-                                            scales[0],
+                                            init_scales[idx]+scales[0],
+                                            # scales[0],
                                             shs[0][:, None, :],
                                             rotations[0],
                                             bg_color=bg_color)
@@ -895,8 +941,10 @@ class Trainer:
                     mask_loss = self.mask_loss(msk[0][bound_mask[idx]==1],mask[idx][bound_mask[idx]==1]) * self.opt.mask_weight
                     loss = loss + mask_loss
                     
-                    if self.opt.scale_loss:
+                    if self.opt.scale_loss and self.opt.scale_constrain_weight != 0:
                         loss = loss + self.scale_loss(torch.std(scales,dim=-1), torch.zeros_like(torch.std(scales,dim=-1))) * self.opt.scale_constrain_weight
+                        # import ipdb;ipdb.set_trace()
+                        # loss = loss + self.scale_loss(torch.std(scales,dim=1), torch.zeros_like(torch.std(scales,dim=1))) * 20.0
                     overall_mask_loss += mask_loss.item()
                     
                     image_loss = self.reconstruct_loss(image.permute((1,2,0))[bound_mask[idx]==1,:], gt_images[idx][bound_mask[idx]==1,:])
@@ -920,32 +968,31 @@ class Trainer:
                         
                         plt.imsave(os.path.join(self.opt.vis_path,f'{ite}_view{idx}.jpg'), np.concatenate((target_img, np_img), axis=1))
 
-                    if ep % 10 == 0 and ite%100 == 0:
+                    if ep %4 == 0 and ite%100 == 0:
                         try:
                             with torch.no_grad():
-                                self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[0],opacity[0],scales[0],rotations[0],shs[0],ite,ep=ep)
+                                self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[0],opacity[0],init_scales[0]+scales[0],rotations[0],shs[0],ite,ep=ep)
                         except:
                             pass 
-                        try:
-                            if i == self.opt.dataset.train_camera_list[0]:
-                                shs_view = shs.detach().view(
-                                    -1, 3, (0 + 1) ** 2
-                                )
-                                dir_pp = means3D - cam.camera_center.repeat(
-                                    shs.shape[0], 1
-                                )
-                                dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
-                                sh2rgb = eval_sh(
-                                    0, shs_view, dir_pp_normalized
-                                )
-                                
-                                colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
-                                uv_map = torch.zeros_like(gt_images[idx])
-                                self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='point_only')   
-                                self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='p')             
                         
-                        except:
-                            pass 
+                        if i == self.opt.dataset.train_camera_list[0]:
+                            shs_view = shs.detach().view(
+                                -1, 3, (0 + 1) ** 2
+                            )
+                            dir_pp = means3D - cam.camera_center.repeat(
+                                shs.shape[0], 1
+                            )
+                            dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+                            sh2rgb = eval_sh(
+                                0, shs_view, dir_pp_normalized
+                            )
+                            
+                            colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+                            uv_map = torch.zeros_like(gt_images[idx])
+                            self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='point_only')   
+                            self.model.generator.draw_uv_map(vertices[idx]+means3D[0].detach(),colors_precomp,uv_map,ep,ite,self.opt.vis_ply_path,mode='p')             
+                        
+                        
                           
                                 
           
@@ -1018,7 +1065,8 @@ class Trainer:
         if self.opt.exp_scale:
             attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), self.inverse_sigmoid(scale),rotation), axis=1)
         else:
-            attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), np.log(scale),rotation), axis=1)
+            # import ipdb;ipdb.set_trace()
+            attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), self.inverse_sigmoid(scale),rotation), axis=1)
             
         
 

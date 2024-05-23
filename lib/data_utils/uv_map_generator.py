@@ -487,15 +487,16 @@ class UV_Map_Generator():
                 c = m[i]
                 uv_map[vts[i][0],vts[i][1]] = c
             # import ipdb;ipdb.set_trace()
-            plt.imsave(os.path.join(path,f'uv_map_epoch{epoch}_view{view}.png'),uv_map.cpu().numpy()[...,::-1]*255)
+            plt.imsave(os.path.join(path,f'uv_map_epoch{epoch}_view{view}.png'),uv_map.cpu().numpy()/255.0)
         else:
             vts = torch.floor(torch.tensor(self.texcoords).to(device) * torch.tensor([[self.h - 1, self.w - 1]]).to(device)).int()
             
             m = self.v_to_vt @ shs
             im = self.UV_interp(m.cpu().numpy())
-            if im.max() <= 1:
-                im = im * 255
-            plt.imsave(os.path.join(path,f'uv_map_epoch{epoch}_view{view}.png'),im[...,::-1])
+            # if im.max() <= 1:
+            #     im = im * 255
+            
+            plt.imsave(os.path.join(path,f'uv_map_epoch{epoch}_view{view}.png'),im)
 
             
             
