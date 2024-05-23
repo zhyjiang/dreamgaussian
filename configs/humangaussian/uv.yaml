@@ -2,11 +2,11 @@
 outdir: checkpoints 
 mesh_format: obj
 
-save_path: /work/u1436961/ZhongyuJ/checkpoints/proj_scale_factor_0.2_2
-save_name: /work/u1436961/ZhongyuJ/checkpoints/proj_scale_factor_0.2_2 #similarity score feature level
-vis_path: /work/u1436961/ZhongyuJ/checkpoints/proj_scale_factor_0.2_2
-vis_ply_path: /work/u1436961/ZhongyuJ/checkpoints/proj_scale_factor_0.2_2
-vis_novel_view: /work/u1436961/ZhongyuJ/checkpoints/proj_scale_factor_0.2_2
+save_path: test
+save_name: test #similarity score feature level
+vis_path: test
+vis_ply_path: test
+vis_novel_view: test
 save_interval: 50 
 eval_interval: 4
 eval_only: False # only if evaluation 
@@ -16,8 +16,9 @@ smpl_driven_training: False #train with unpaired smpl/image
 fake_ratio: 0.0 #ratio of the unpaired data
 scale_loss: True # the loss to constratin scale to make it more sphere-wise
 
+pretrain_path: 
 # pretrain_path: /home/u1436961/Zhongyuj/dreamgaussian/proj_scale_exp_2/work/u1436961/ZhongyuJ/checkpoints/proj_scale_exp_2/epoch450.pth
-pretrain_path: /home/u1436961/Zhongyuj/dreamgaussian/proj_scale_factor_0.2/work/u1436961/ZhongyuJ/checkpoints/proj_scale_factor_0.2/epoch100.pth
+# pretrain_path: /home/u1436961/Zhongyuj/dreamgaussian/proj_scale_factor_0.2/work/u1436961/ZhongyuJ/checkpoints/proj_scale_factor_0.2/epoch100.pth
 
 input_mode: 'image+smpl' # 'image+smpl' or 'uv' or 'shape'
 train_strategy:  'both' #'uv' and 'shape' or 'both' for joint training

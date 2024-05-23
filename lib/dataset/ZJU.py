@@ -208,6 +208,7 @@ class ZJU(Dataset):
                 
         
         self.vertices = np.concatenate(self.vertices,axis=0)
+        # import ipdb;ipdb.set_trace()
         self.smpl_params = np.concatenate(self.smpl_params,axis=0)
         
         try:

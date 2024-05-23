@@ -408,7 +408,7 @@ class Trainer:
         self.ssim_loss = ssim
         self.smooth_loss = cosine_similarity
         # self.smooth_loss = features_diff
-        self.part_weight = np.load('part_weight.npy')
+        # self.part_weight = np.load('part_weight.npy')
         self.feature_loss = torch.nn.MSELoss()
         # self.IOU_loss = IoULoss()
      
