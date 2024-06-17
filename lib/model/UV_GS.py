@@ -101,7 +101,7 @@ class UV_GS(nn.Module):
         if self.opt.pretrain_uv:
             self.shape_model = None
         else:
-            self.shape_model = UV_Transformer(self.opt,generator=self.generator,shape=True,hidden_dim=64,dim_head=64).to(self.device)
+            self.shape_model = UV_Transformer(self.opt,generator=self.generator,shape=True,hidden_dim=128,dim_head=128).to(self.device)
 
         
         if self.opt.triple_point:

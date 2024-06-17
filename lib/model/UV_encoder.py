@@ -23,6 +23,8 @@ from transformers import ViTImageProcessor, ViTModel, ViTConfig
 from lib.model.triplane import TriplaneLearnablePositionalEmbedding
 from PIL import Image
 import requests
+from lib.model.VAE import Decoder, VectorQuantizerEMA
+
 
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
@@ -384,6 +386,15 @@ class UV_Transformer(nn.Module):
         self.img_channel= self.opt.dataset.img_channel
         self.mode = 'uv' if uv else 'shape'
 
+        if self.mode == 'shape':
+
+            self._vq_vae = VectorQuantizerEMA(self.opt.vq_vae.num_embeddings, self.opt.vq_vae.embedding_dim, 
+                                                self.opt.vq_vae.commitment_cost, self.opt.vq_vae.decay,opt=self.opt)
+            self._decoder = Decoder(self.opt.vae_decoder.embedding_dim,
+                                    self.opt.vae_decoder.num_hiddens, 
+                                    self.opt.vae_decoder.num_residual_layers, 
+                                    self.opt.vae_decoder.num_residual_hiddens)
+
         # self.w = torch.nn.Parameter(torch.randn(6890*2,6890),requires_grad=True)
         
         
@@ -508,12 +519,34 @@ class UV_Transformer(nn.Module):
             
             self.img_down = None
         else:
-
+            
             self.mean3D_head = self._make_head(hidden_dim, 3)
-            self.rotations_head = self._make_head(hidden_dim, 4)
+            # self.rotations_head = self._make_head(hidden_dim, 4)
             self.opacity_head = self._make_head(hidden_dim, 1)
-            self.scales_head = self._make_head(hidden_dim, 3)
+            # self.scales_head = self._make_head(hidden_dim, 3)
             self.img_down = nn.Linear(768,hidden_dim)
+
+            self.mlp = nn.Linear(128,128)
+
+            with torch.no_grad():
+                self.reference_embedding = torch.tensor(np.load('reference.npy')).reshape((1,-1)).repeat((1,1,self.num_joints,1))
+                # meanEmbedding = torch.mean(self._vq_vae._embedding.weight,dim=0)[None,...]
+                # distances = (torch.sum(meanEmbedding**2, dim=1, keepdim=True) 
+                #         + torch.sum(self._vq_vae._embedding.weight**2, dim=1)
+                #         - 2 * torch.matmul(meanEmbedding, self._vq_vae._embedding.weight.t()))
+
+                #         # Encoding
+                # encoding_indices = torch.argmin(distances, dim=1).unsqueeze(1)
+
+
+                # encodings = torch.zeros(encoding_indices.shape[0], self._vq_vae._num_embeddings)
+                # encodings.scatter_(1, encoding_indices, 1)
+
+                # self.reference_embedding = torch.matmul(encodings, self._vq_vae._embedding.weight).repeat((self.num_joints,1))
+
+        
+
+            # self._64to128 = nn.Linear(64,128) 
 
         self.relu = nn.ReLU()
         self.softmax = nn.Softmax(dim=-1)
@@ -646,6 +679,13 @@ class UV_Transformer(nn.Module):
                 x = x.squeeze(0).permute((1,0,2))
                 features = x.clone()
 
+               
+
+
+
+                
+
+                
 
             else:
 
@@ -656,17 +696,48 @@ class UV_Transformer(nn.Module):
                 x = self.upsampler(x)
                 x = x.view(224,224,-1)
                 features = x.clone()
+
+               
         
             means3D = self.mean3D_head(x)
             opacity = self.opacity_head(x).sigmoid()
-            rotations = F.normalize(self.rotations_head(x))
+
+            x = self.mlp(x).unsqueeze(0)
+            # import ipdb;ipdb.set_trace()
+            # x = x + self.reference_embedding.to(x.device)
+
+            # import ipdb;ipdb.set_trace()
+            # import ipdb;ipdb.set_trace()
+
             
-            if self.opt.exp_scale:
-                scales = torch.exp(self.scales_head(x))
+            # import ipdb;ipdb.set_trace()
+            x = x.permute(0,3,1,2)
+
+
+
+            # x = x[0]
+            # _, x, _, _ = self._vq_vae(x)
+
+
+            # import ipdb;ipdb.set_trace()
+            # x = x + torch.ones_like(x) * (-5)
+            x_recon = self._decoder(x).permute(0,2,3,1).squeeze(0)
+            # import ipdb;ipdb.set_trace()
+            scales = x_recon[...,:3]
+
+            # import ipdb;ipdb.set_trace()
+
+            rotations = x_recon[...,3:]
+
+            # rotations = F.normalize(self.rotations_head(x))
+            
+            # if self.opt.exp_scale:
+            #     scales = torch.exp(self.scales_head(x))
                 # scales  = torch.clamp(scales, min=0, max=self.opt.clip_scaling)
-            else:
-                scales = self.scales_head(x).sigmoid()
-            
+            # else:
+            #     scales = self.scales_head(x).sigmoid()
+            # import ipdb;ipdb.set_trace()
+
             if self.opt.return_RT:
                 new_R = self.R_head(x).view((bs,-1,3,3))
                 new_T = self.T_head(x).view((bs,-1,3))

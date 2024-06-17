@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from transformers import ViTImageProcessor, ViTModel, ViTConfig
 from sh_utils import eval_sh, SH2RGB, RGB2SH
 
+
 import rembg
 
 from lib.gs.gs_renderer import Renderer,Camera
@@ -28,7 +29,7 @@ from .network import get_network, LinLayers
 from .utils import get_state_dict
 from math import exp
 from torch.autograd import Variable
-
+from collections import OrderedDict
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -168,6 +169,7 @@ class Trainer:
 
         self.buffer_image = np.ones((self.W, self.H, 3), dtype=np.float32)
         self.need_update = True  # update buffer_image
+        self.vae_tune = self.opt.vae_tune
 
         # models
         self.device = torch.device("cuda")
@@ -175,6 +177,8 @@ class Trainer:
         self.dimension = 3
         self.model = UV_GS(self.opt).to(self.device)
         self.nearest_point = torch.tensor(np.load('nearest_point.npy')).to(self.device)
+
+        self.pretrain_vae = self.opt.pretrain_vae
 
         # path = '/home/zhongyuj/GauHuman/output/zju_mocap_refine/pureCoreView_386/point_cloud/iteration_1200/point_cloud.ply'
         # plydata = PlyData.read(path)
@@ -198,10 +202,11 @@ class Trainer:
 
             
         
+        
 
             
 
-        if self.pretrain_path is not None:
+        if self.pretrain_path is not None :
             # import ipdb;ipdb.set_trace()
             ckpt = torch.load(self.pretrain_path)
             # m = {k: v for k, v in ckpt.items() if 'shape_model' not in k}
@@ -211,6 +216,25 @@ class Trainer:
             
             
             print(f'Loaded pretrained model from {self.pretrain_path}')
+
+        if self.pretrain_vae is not None:
+
+            ckpt = torch.load(self.pretrain_vae)
+
+            desired_layer_keys = OrderedDict((key, value) for key, value in ckpt.items() if key.startswith('_vq_vae'))
+
+            self.model.shape_model.load_state_dict(desired_layer_keys,strict=False)
+            # for in desired_layer_keys:
+
+            desired_layer_keys_2 = OrderedDict((key, value) for key, value in ckpt.items() if key.startswith('_decoder'))
+
+
+            self.model.shape_model.load_state_dict(desired_layer_keys_2,strict=False)
+
+            # import ipdb;ipdb.set_trace()
+
+
+           
 
         # renderer
         self.renderer = Renderer(sh_degree=self.opt.sh_degree,opt=self.opt)
@@ -670,8 +694,12 @@ class Trainer:
                     
                     
                     else:
-                        scales  = scales * self.opt.scale_factor
+                        # scales  = scales * self.opt.scale_factor
                         means3D = means3D * self.opt.means3D_scale
+
+                    scales = torch.exp(scales).clamp(min=0,max=None)
+                    rotations = F.normalize(rotations)
+
                         
                     # opacity = 0.1*torch.ones(opacity)
                     # opacity = 0.1*torch.ones((means3D.shape[0],means3D.shape[1],1))
@@ -685,17 +713,20 @@ class Trainer:
                         scales = scales * self.model.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
                     
                     if ite == 0:
-                        plt.hist(scales[...,0].flatten().detach().cpu().numpy(),bins=10)
-                        plt.savefig(f'{self.opt.vis_ply_path}/scale_0.png')
-                        plt.close()
+                        try:
+                            plt.hist(scales[...,0].flatten().detach().cpu().numpy(),bins=10)
+                            plt.savefig(f'{self.opt.vis_ply_path}/scale_0.png')
+                            plt.close()
 
-                        plt.hist(scales[...,1].flatten().detach().cpu().numpy(),bins=10)
-                        plt.savefig(f'{self.opt.vis_ply_path}/scale_1.png')
-                        plt.close()
+                            plt.hist(scales[...,1].flatten().detach().cpu().numpy(),bins=10)
+                            plt.savefig(f'{self.opt.vis_ply_path}/scale_1.png')
+                            plt.close()
 
-                        plt.hist(scales[...,2].flatten().detach().cpu().numpy(),bins=10)
-                        plt.savefig(f'{self.opt.vis_ply_path}/scale_2.png')
-                        plt.close()
+                            plt.hist(scales[...,2].flatten().detach().cpu().numpy(),bins=10)
+                            plt.savefig(f'{self.opt.vis_ply_path}/scale_2.png')
+                            plt.close()
+                        except:
+                            pass
 
                     for i in self.opt.dataset.test_camera_list:
                         idx = i-1
@@ -716,7 +747,7 @@ class Trainer:
                         out = self.renderer.render(cam,
                                                 self.model.model.w@vertices[idx]+means3D[0] if self.opt.learned_w else vertices[idx]+means3D[0],
                                                 opacity[0],
-                                                init_scales[idx]+scales[0],
+                                                scales[0],
                                                 shs[0][:, None, :],
                                                 rotations[0],
                                                 bg_color=bg_color)
@@ -730,7 +761,10 @@ class Trainer:
                         np_img = np_img.transpose(1, 2, 0)
                         
                         target_img = gt_images[idx].cpu().numpy()
-                        plt.imsave(f'{self.opt.vis_novel_view}/{ite}_view{idx}.jpg', np.concatenate((target_img, np_img), axis=1) )
+                        try:
+                            plt.imsave(f'{self.opt.vis_novel_view}/{ite}_view{idx}.jpg', np.concatenate((target_img, np_img), axis=1) )
+                        except:
+                            pass
                         psnr_l.append(self.psnr_metric(np_img, target_img))
                         ssim_l.append(skimage.metrics.structural_similarity( target_img,np_img, multichannel=True,channel_axis=-1,data_range=1.0))   
 
@@ -771,21 +805,30 @@ class Trainer:
         self.init = True if self.opt.pretrain_uv else False
         
         linear_schedule = torch.arange(0.1,0,-0.01)
-        # if not self.opt.train_strategy == 'both':
-        #     if ep % self.opt.switch_epoch == 0:
-        #         if self.opt.train_strategy == 'uv' :
-        #             self.opt.train_strategy = 'shape'
-        #             self.model.freeze(self.model.uv_model)
-        #             self.model.activate(self.model.shape_model)
+        if not self.opt.train_strategy == 'both':
+            if ep % self.opt.switch_epoch == 0:
+                if self.opt.train_strategy == 'uv' :
+                    self.opt.train_strategy = 'shape'
+                    self.model.freeze(self.model.uv_model)
+                    self.model.activate(self.model.shape_model)
 
-        #         else:
-        #             self.opt.train_strategy = 'uv'
-        #             self.model.activate(self.model.uv_model)
-        #             if not self.opt.pretrain_uv:
-        #                 self.model.freeze(self.model.shape_model)
-        # else:
-        #     self.model.activate(self.model.uv_model)
-        #     self.model.activate(self.model.shape_model)
+                else:
+                    self.opt.train_strategy = 'uv'
+                    self.model.activate(self.model.uv_model)
+                    if not self.opt.pretrain_uv:
+                        self.model.freeze(self.model.shape_model)
+        else:
+            self.model.activate(self.model.uv_model)
+            self.model.activate(self.model.shape_model)
+
+            if self.vae_tune:
+                self.model.activate(self.model.shape_model._decoder)
+                self.model.activate(self.model.shape_model._vq_vae)
+            else:
+                self.model.freeze(self.model.shape_model._decoder)
+                self.model.freeze(self.model.shape_model._vq_vae)
+                self.model.check_no_grad(self.model.shape_model._decoder)
+                self.model.check_no_grad(self.model.shape_model._vq_vae)
 
             
         world_vertex = {}
@@ -866,8 +909,8 @@ class Trainer:
                             temp_gt_images = gt_images[rand_view].unsqueeze(0)
                             
                 if self.opt.train_strategy == 'uv':
-                    self.model.freeze(self.model.shape_model)
-                    self.model.activate(self.model.uv_model)
+                    # self.model.freeze(self.model.shape_model)
+                    # self.model.activate(self.model.uv_model)
                     if self.opt.pretrain_uv:
                         shs = self.model(pose,shape,temp_gt_images,cam=None,pretrain_uv=True)
                     else:
@@ -876,7 +919,8 @@ class Trainer:
                 else:
                     means3D,opacity, scales, shs, rotations = self.model(pose,shape,temp_gt_images,cam=None)
                     
-
+                # import ipdb;ipdb.set_trace()
+                # shs = shs.clamp(0,1)
  
                 if self.opt.triple_point:
                     extra_points = self.model.generator.midpoints_to_v[:,0,:] @ vertices  #13776 , 3
@@ -886,10 +930,10 @@ class Trainer:
                 if self.opt.train_strategy == 'uv':
                     if self.init:
                         means3D = torch.zeros((bs,6890,3)).to(self.device)
-                        scales = torch.ones((bs,6890,3)).to(self.device)*0.01
+                        scales = torch.ones((bs,6890,3)).to(self.device)*0.00
                         opacity = torch.ones((bs,6890,1)).to(self.device)
                         rotations = torch.zeros((bs,6890,4)).to(self.device)
-                        rotations[...,0] = 1 
+                        # rotations[...,0] = 1 
                     else:
                         scales  = scales * self.opt.scale_factor
 
@@ -897,12 +941,13 @@ class Trainer:
                     
                     
                 else:
-                    scales  = scales * self.opt.scale_factor
+                    # scales  = scales * self.opt.scale_factor
                     means3D = means3D * self.opt.means3D_scale
                     
-
-                if self.opt.learned_scale:
-                    scales = scales * self.model.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
+                scales = torch.exp(scales).clamp(min=0,max=None)
+                rotations = F.normalize(rotations)
+                # if self.opt.learned_scale:
+                #     scales = scales * self.model.ln_scale_weight.sigmoid()*self.opt.learned_scale_weight
              
                 for i in train_camera_set:  
 
@@ -919,14 +964,20 @@ class Trainer:
 
                     bg_color = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
                     # import ipdb;ipdb.set_trace()
-                    out = self.renderer.render(cam,
-                                            self.model.model.w@vertices[idx]+means3D[0] if self.opt.learned_w else vertices[idx]+means3D[0],
-                                            opacity[0],
-                                            init_scales[idx]+scales[0],
-                                            # scales[0],
-                                            shs[0][:, None, :],
-                                            rotations[0],
-                                            bg_color=bg_color)
+                    # if scales.min() < 0:
+                    #     import ipdb;ipdb.set_trace()
+
+                    try:
+                        out = self.renderer.render(cam,
+                                                self.model.model.w@vertices[idx]+means3D[0] if self.opt.learned_w else vertices[idx]+means3D[0],
+                                                opacity[0],
+                                                scales[0],
+                                                # scales[0],
+                                                shs[0][:, None, :],
+                                                rotations[0],
+                                                bg_color=bg_color)
+                    except:
+                        import ipdb;ipdb.set_trace()
                         
                    
                     image = out["image"] # [1, 3, H, W] in [0, 1]
@@ -941,8 +992,8 @@ class Trainer:
                     mask_loss = self.mask_loss(msk[0][bound_mask[idx]==1],mask[idx][bound_mask[idx]==1]) * self.opt.mask_weight
                     loss = loss + mask_loss
                     
-                    if self.opt.scale_loss and self.opt.scale_constrain_weight != 0:
-                        loss = loss + self.scale_loss(torch.std(scales,dim=-1), torch.zeros_like(torch.std(scales,dim=-1))) * self.opt.scale_constrain_weight
+                    # if self.opt.scale_loss and self.opt.scale_constrain_weight != 0:
+                    #     loss = loss + self.scale_loss(torch.std(scales,dim=-1), torch.zeros_like(torch.std(scales,dim=-1))) * self.opt.scale_constrain_weight
                         # import ipdb;ipdb.set_trace()
                         # loss = loss + self.scale_loss(torch.std(scales,dim=1), torch.zeros_like(torch.std(scales,dim=1))) * 20.0
                     overall_mask_loss += mask_loss.item()
@@ -965,10 +1016,12 @@ class Trainer:
                     if ite % 30 == 0 or ite == 1:
                         np_img = image.detach().cpu().numpy().transpose(1, 2, 0)
                         target_img = gt_images[idx].cpu().numpy()
-                        
-                        plt.imsave(os.path.join(self.opt.vis_path,f'{ite}_view{idx}.jpg'), np.concatenate((target_img, np_img), axis=1))
+                        try:
+                            plt.imsave(os.path.join(self.opt.vis_path,f'{ite}_view{idx}.jpg'), np.concatenate((target_img, np_img), axis=1))
+                        except:
+                            pass
 
-                    if ep %4 == 0 and ite%100 == 0:
+                    if ep %4 == 0 and ite%20 == 0:
                         try:
                             with torch.no_grad():
                                 self.save_ply(self.opt.vis_ply_path,vertices[idx]+means3D[0],opacity[0],init_scales[0]+scales[0],rotations[0],shs[0],ite,ep=ep)
@@ -1062,11 +1115,11 @@ class Trainer:
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
         
         # import ipdb;ipdb.set_trace()
-        if self.opt.exp_scale:
-            attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), self.inverse_sigmoid(scale),rotation), axis=1)
-        else:
-            # import ipdb;ipdb.set_trace()
-            attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), self.inverse_sigmoid(scale),rotation), axis=1)
+        # if self.opt.exp_scale:
+        attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), torch.log(scale),rotation), axis=1)
+        # else:
+        #     # import ipdb;ipdb.set_trace()
+        #     attributes = np.concatenate((xyz, normals, color, f_rest,self.inverse_sigmoid(opacities), self.inverse_sigmoid(scale),rotation), axis=1)
             
         
 

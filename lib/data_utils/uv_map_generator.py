@@ -477,17 +477,20 @@ class UV_Map_Generator():
     def draw_uv_map(self,xyz,shs,uv_map,epoch,view,path,mode='whole'):
         device = xyz.device
         # import ipdb;ipdb.set_trace()
+
+        shs = shs.clamp(0,1)
         
         if mode == 'point_only':
         
             vts = torch.floor(torch.tensor(self.texcoords).to(device) * torch.tensor([[self.h - 1, self.w - 1]]).to(device)).int()
-            
             m = self.v_to_vt @ shs
             for i in range(len(m)):
                 c = m[i]
                 uv_map[vts[i][0],vts[i][1]] = c
-            # import ipdb;ipdb.set_trace()
-            plt.imsave(os.path.join(path,f'uv_map_epoch{epoch}_view{view}.png'),uv_map.cpu().numpy()/255.0)
+            try:
+                plt.imsave(os.path.join(path,f'uv_map_epoch{epoch}_view{view}_{mode}.png'),uv_map.cpu().numpy())
+            except:
+                pass
         else:
             vts = torch.floor(torch.tensor(self.texcoords).to(device) * torch.tensor([[self.h - 1, self.w - 1]]).to(device)).int()
             
@@ -495,8 +498,10 @@ class UV_Map_Generator():
             im = self.UV_interp(m.cpu().numpy())
             # if im.max() <= 1:
             #     im = im * 255
-            
-            plt.imsave(os.path.join(path,f'uv_map_epoch{epoch}_view{view}.png'),im)
+            try:
+                plt.imsave(os.path.join(path,f'uv_map_epoch{epoch}_view{view}_{mode}.png'),im)
+            except:
+                pass
 
             
             

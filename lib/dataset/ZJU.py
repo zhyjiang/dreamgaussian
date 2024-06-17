@@ -196,19 +196,26 @@ class ZJU(Dataset):
                 self.vertices.append(pickle.load(open(os.path.join(sub_path, 'all_vertices.pkl'), 'rb')))
                 # print(len(self.vertices))
             else:
+                temp_vertices = []
+                temp_smpl_params = []
                 for fid in tqdm(range(num_frame)):
                     if self.path[i] in (313, 315):
                         fid = fid + 1
                     # import ipdb;ipdb.set_trace()
                     smpl_params  = np.load(os.path.join(sub_path, 'new_params', f'{fid}.npy'), allow_pickle=True).item()
-                    self.smpl_params.append(smpl_params)
+                    temp_smpl_params.append(smpl_params)
                     vertices = np.load(os.path.join(sub_path, 'new_vertices', f'{fid}.npy'), allow_pickle=True)
                     vertices = np.concatenate([vertices, np.ones([vertices.shape[0], 1])], axis=-1)
-                    self.vertices.append(vertices)
-                pickle.dump(self.smpl_params, open(os.path.join(sub_path, 'all_params.pkl'), 'wb'))
-                pickle.dump(self.vertices, open(os.path.join(sub_path, 'all_vertices.pkl'), 'wb'))
+                    temp_vertices.append(vertices)
+                 
+
+                self.vertices.append(temp_vertices)
+                self.smpl_params.append(temp_smpl_params)
+                pickle.dump(temp_smpl_params, open(os.path.join(sub_path, 'all_params.pkl'), 'wb'))
+                pickle.dump(temp_vertices, open(os.path.join(sub_path, 'all_vertices.pkl'), 'wb'))
                 
-        
+        # self.vertices = np.array(self.vertices)
+        # self.smpl_params = np.array(self.smpl_params)
         self.vertices = np.concatenate(self.vertices,axis=0)
         # import ipdb;ipdb.set_trace()
         self.smpl_params = np.concatenate(self.smpl_params,axis=0)
